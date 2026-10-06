@@ -123,7 +123,13 @@ creates stale-state bugs. Option B moves the complexity into one tested function
    LEAK can never be a connected state (see review notes).
 3. [ ] Decide: is a station "connected" when the Monitor is registered, or only once
    the Engine is attached? (Proposed: add an `ENGINE_CONNECTED` message.)
-4. [ ] `database.py`: connect helper (`foreign_keys=ON`, WAL, one connection per
-   thread), schema bootstrap, startup recovery, CRUD, `effective_status()`.
-5. [ ] Unit tests for every transition in the table above.
+4. [x] `database.py`: `foreign_keys=ON`, WAL, schema bootstrap, startup recovery, CRUD.
+   Implemented with ONE shared connection behind a lock (a connection per thread
+   leaked one connection per Monitor thread and crashed on shutdown ordering).
+5. [x] `state_manager.py` with `effective_status()` and tests for every row of the
+   precedence table.
 6. [ ] Decide how operators are added (seed file, CENTRAL menu, or both).
+7. [ ] PROPOSED new Monitor -> Central message `WS_E_FAULT_RESOLVED {ws_id, timestamp}`
+   (answered with `FAULT_ACK`). The PDF says "a new message will be sent to CENTRAL"
+   once the contingency is resolved but defines no format; without it a LEAK can
+   only be cleared from inside CENTRAL. Already implemented on the Central side.
