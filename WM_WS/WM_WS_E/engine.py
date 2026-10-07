@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 import socket
 import threading
+import time
 
-from WM_WS.WM_WS_M import protocol
+from common import protocol
 
 from .config import EngineConfig
 from .flow_meter import FlowMeter
@@ -23,7 +24,7 @@ class WateringStationEngine:
     ) -> None:
         self.config = config
         self.irrigation = irrigation_controller or IrrigationController(
-            ws_id=config.ws_id,
+            ws_id=config.ws_id or "",
             valve=SolenoidValve(),
             flow_meter=FlowMeter(config.flow_rate_lpm),
             telemetry_interval=config.telemetry_interval,
@@ -56,12 +57,18 @@ class WateringStationEngine:
     def send_hello(self, sock: socket.socket | None = None) -> bool:
         conn = sock or self._require_monitor_socket()
         LOGGER.info("HELLO_WS_E sent")
-        protocol.send_message(
-            conn,
-            {"type": "HELLO_WS_E", "ws_id": self.config.ws_id, "component": "WM_WS_E"},
-        )
+        hello: dict[str, object] = {"type": protocol.HELLO_WS_E, "component": "WM_WS_E"}
+        if self.config.ws_id is not None:  # compatibility with pre-assigned Engines
+            hello["ws_id"] = self.config.ws_id
+        protocol.send_message(conn, hello)
         response = protocol.receive_message(conn)
-        if response.get("type") == "HELLO_ACK" and response.get("ws_id") == self.config.ws_id:
+        assigned_ws_id = response.get("ws_id")
+        if response.get("type") == protocol.HELLO_ACK and isinstance(assigned_ws_id, str):
+            if self.config.ws_id is not None and assigned_ws_id != self.config.ws_id:
+                LOGGER.error("WM_WS_M assigned a different WS ID: %s", response)
+                return False
+            self.config = EngineConfig(**{**self.config.__dict__, "ws_id": assigned_ws_id})
+            self.irrigation.ws_id = assigned_ws_id
             LOGGER.info("HELLO_ACK received")
             return True
         LOGGER.error("WM_WS_M rejected Engine connection: %s", response)
@@ -69,17 +76,18 @@ class WateringStationEngine:
 
     def run(self) -> int:
         LOGGER.info("WM_WS_E started")
-        try:
-            self.connect_to_monitor()
-            if not self.send_hello():
-                return 1
-            self.handle_monitor_messages()
-            return 0
-        except (OSError, protocol.ProtocolError) as exc:
-            LOGGER.error("WM_WS_E stopped due to communication error: %s", exc)
-            return 1
-        finally:
-            self.close()
+        while not self._stop_event.is_set():
+            try:
+                self.connect_to_monitor()
+                if self.send_hello():
+                    self.handle_monitor_messages()
+                self._disconnect_monitor()
+            except (OSError, protocol.ProtocolError) as exc:
+                LOGGER.error("WM_WS_E communication error: %s", exc)
+                self._disconnect_monitor()
+            if not self._stop_event.is_set():
+                time.sleep(0.1)
+        return 0
 
     def handle_monitor_messages(self) -> None:
         conn = self._require_monitor_socket()
@@ -133,6 +141,7 @@ class WateringStationEngine:
 
     def simulate_failure(self) -> None:
         self.failed = True
+        self.irrigation.emergency_stop()
         LOGGER.warning("Simulated KO enabled")
 
     def clear_failure(self) -> None:
@@ -140,6 +149,9 @@ class WateringStationEngine:
         LOGGER.info("Simulated KO cleared")
 
     def request_irrigation(self, operator_id: str, duration_seconds: float | None = None) -> bool:
+        if self.failed:
+            LOGGER.warning("Irrigation rejected while Engine is failed")
+            return False
         duration = duration_seconds
         if duration is None:
             duration = self.config.default_irrigation_duration
@@ -157,3 +169,9 @@ class WateringStationEngine:
             raise RuntimeError("Engine is not connected to WM_WS_M")
         return self.monitor_socket
 
+    def _disconnect_monitor(self) -> None:
+        if self.monitor_socket is not None:
+            try:
+                self.monitor_socket.close()
+            finally:
+                self.monitor_socket = None

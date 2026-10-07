@@ -97,6 +97,16 @@ class IrrigationController:
             self._stop_event.set()
             return True
 
+    def emergency_stop(self) -> bool:
+        """Immediately make the actuator safe and stop the active cycle."""
+        with self._lock:
+            if self.state != IrrigationState.WATERING:
+                self.valve.close()
+                return False
+            self._stop_event.set()
+            self.valve.close()
+            return True
+
     def wait_until_finished(self, timeout: float | None = None) -> bool:
         thread = self._thread
         if thread is None:
@@ -163,4 +173,3 @@ class IrrigationController:
             duration_seconds=reading.duration_seconds,
             final=final,
         )
-
