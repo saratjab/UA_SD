@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class EngineConfig:
-    ws_id: str
+    ws_id: str | None
     kafka_host: str
     kafka_port: int
     monitor_host: str
@@ -19,7 +19,7 @@ class EngineConfig:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="WaterManagement Watering Station Engine")
-    parser.add_argument("--ws-id", required=True, help="Watering Station ID")
+    parser.add_argument("--ws-id", help="Optional legacy Watering Station ID; assigned by WM_WS_M")
     parser.add_argument("--kafka-host", required=True, help="Kafka bootstrap host")
     parser.add_argument("--kafka-port", required=True, type=int, help="Kafka bootstrap port")
     parser.add_argument("--monitor-host", required=True, help="WM_WS_M TCP host")
@@ -64,4 +64,3 @@ def parse_args(argv: list[str] | None = None) -> EngineConfig:
         socket_timeout=args.socket_timeout,
         telemetry_interval=args.telemetry_interval,
     )
-
