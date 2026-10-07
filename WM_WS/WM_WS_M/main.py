@@ -24,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
         host=config.central_host,
         port=config.central_port,
         ws_id=config.ws_id,
+        location=config.location,
     )
     engine_server = EngineServer(
         host=config.engine_host,
