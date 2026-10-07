@@ -7,7 +7,7 @@ import socket
 import threading
 import time
 
-from . import protocol
+from common import protocol
 from .central_client import CentralClient
 from .config import MonitorConfig
 from .ws_e_server import EngineServer
@@ -27,6 +27,8 @@ class WateringStationMonitor:
         self.central_client = central_client
         self.engine_server = engine_server
         self.sequence = 0
+        self._fault_active = False
+        self._last_health_connection_usable = False
 
     def run(self) -> int:
         LOGGER.info("Starting WM_WS_M for WS ID %s", self.config.ws_id)
@@ -36,10 +38,24 @@ class WateringStationMonitor:
                 return 1
 
             self.engine_server.start()
-            engine_socket = self.wait_for_engine_connection()
-            with engine_socket:
-                self.monitor_engine(engine_socket)
-            return 0
+            while True:
+                try:
+                    engine_socket = self.wait_for_engine_connection()
+                except OSError as exc:
+                    # A closed listener is normal shutdown.  A transient
+                    # accept failure must not turn an Engine fault into a
+                    # Monitor/Central disconnection.
+                    if self.engine_server.server_sock is None:
+                        return 0
+                    LOGGER.warning("Could not accept WM_WS_E connection: %s", exc)
+                    continue
+                try:
+                    self.monitor_engine(engine_socket)
+                finally:
+                    try:
+                        engine_socket.close()
+                    except OSError:
+                        pass
         except OSError as exc:
             LOGGER.error("WM_WS_M socket error: %s", exc)
             return 1
@@ -69,10 +85,15 @@ class WateringStationMonitor:
         while True:
             self.sequence += 1
             if not self.perform_health_check(engine_socket, self.sequence):
-                return
+                # HEALTH_KO is a valid response.  Keep this connection alive
+                # so a recovered Engine can prove it is healthy; transport and
+                # protocol failures return to accept() for a reconnection.
+                if not self._last_health_connection_usable:
+                    return
             time.sleep(self.config.health_interval)
 
     def perform_health_check(self, engine_socket: socket.socket, sequence: int) -> bool:
+        self._last_health_connection_usable = False
         message = protocol.health_check_message(self.config.ws_id, sequence)
         try:
             protocol.send_message(engine_socket, message)
@@ -80,36 +101,59 @@ class WateringStationMonitor:
             response = protocol.receive_message(engine_socket)
         except socket.timeout:
             LOGGER.error("WM_WS_E health-check timeout")
-            self.report_fault("timeout", "No health-check response received")
+            self.activate_fault("timeout", "No health-check response received")
             return False
         except (protocol.ConnectionClosedError, ConnectionResetError, BrokenPipeError, OSError):
             LOGGER.error("WM_WS_E connection lost")
-            self.report_fault("connection_lost", "TCP connection to WM_WS_E was closed")
+            self.activate_fault("connection_lost", "TCP connection to WM_WS_E was closed")
             return False
         except protocol.ProtocolError as exc:
             LOGGER.error("Malformed health response from WM_WS_E: %s", exc)
-            self.report_fault("malformed_response", str(exc))
+            self.activate_fault("malformed_response", str(exc))
             return False
 
         response_type = response.get("type")
         response_sequence = response.get("sequence")
         if response_sequence != sequence:
             LOGGER.error("WM_WS_E returned unexpected health sequence: %s", response)
-            self.report_fault("malformed_response", "Unexpected health-check sequence")
+            self.activate_fault("malformed_response", "Unexpected health-check sequence")
             return False
 
-        if response_type == "HEALTH_OK":
+        if response_type == protocol.HEALTH_OK:
+            self._last_health_connection_usable = True
+            self.resolve_fault_if_needed()
             return True
 
-        if response_type == "HEALTH_KO":
+        if response_type == protocol.HEALTH_KO:
+            self._last_health_connection_usable = True
             reason = str(response.get("reason", "WM_WS_E returned KO"))
             LOGGER.error("WM_WS_E reported KO: %s", reason)
-            self.report_fault("health_ko", reason)
+            self.activate_fault("health_ko", reason)
             return False
 
         LOGGER.error("WM_WS_E returned unexpected health response: %s", response)
-        self.report_fault("malformed_response", "Unexpected health-check response")
+        self.activate_fault("malformed_response", "Unexpected health-check response")
         return False
+
+    def activate_fault(self, fault: str, details: str) -> bool:
+        if self._fault_active:
+            return True
+        reported = self.report_fault(fault, details)
+        if reported:
+            self._fault_active = True
+        return reported
+
+    def resolve_fault_if_needed(self) -> bool:
+        if not self._fault_active:
+            return True
+        try:
+            resolved = self.central_client.report_fault_resolved(utc_timestamp())
+        except (OSError, protocol.ProtocolError) as exc:
+            LOGGER.error("Failed to notify WM_Central that WM_WS_E recovered: %s", exc)
+            return False
+        if resolved:
+            self._fault_active = False
+        return resolved
 
     def report_fault(self, fault: str, details: str) -> bool:
         try:
