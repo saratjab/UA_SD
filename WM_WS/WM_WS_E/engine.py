@@ -30,6 +30,7 @@ class WateringStationEngine:
             telemetry_interval=config.telemetry_interval,
         )
         self.failed = False
+        self.blocked = False
         self.monitor_socket: socket.socket | None = None
         self._stop_event = threading.Event()
 
@@ -50,6 +51,7 @@ class WateringStationEngine:
 
     def close(self) -> None:
         self._stop_event.set()
+        self.irrigation.emergency_stop()
         if self.monitor_socket is not None:
             self.monitor_socket.close()
             self.monitor_socket = None
@@ -149,7 +151,7 @@ class WateringStationEngine:
         LOGGER.info("Simulated KO cleared")
 
     def request_irrigation(self, operator_id: str, duration_seconds: float | None = None) -> bool:
-        if self.failed:
+        if self.failed or self.blocked:
             LOGGER.warning("Irrigation rejected while Engine is failed")
             return False
         duration = duration_seconds
