@@ -19,6 +19,8 @@ from .database import Database
 from .monitoring import log_station_table
 from .socket_server import CentralSocketServer
 from .state_manager import StateManager
+from .kafka_service import CentralKafkaService
+from common.kafka_transport import KafkaPublisher, KafkaUnavailable
 
 
 LOGGER = logging.getLogger("wm_central")
@@ -45,7 +47,18 @@ def main(argv: list[str] | None = None) -> int:
     state = StateManager(db)
     log_station_table(LOGGER, state)  # every known station is DISCONNECTED right now
 
-    # TODO(kafka): config.kafka_host / kafka_port are parsed but not used yet.
+    kafka_threads: list[threading.Thread] = []
+    workers = []
+    try:
+        publisher = KafkaPublisher(f"{config.kafka_host}:{config.kafka_port}")
+        kafka = CentralKafkaService(db, state, publisher)
+        workers = [kafka.activation_worker(f"{config.kafka_host}:{config.kafka_port}"), kafka.event_worker(f"{config.kafka_host}:{config.kafka_port}")]
+        for worker in workers:
+            worker.start()
+            thread = threading.Thread(target=lambda w=worker: _poll_worker(w), daemon=True)
+            thread.start(); kafka_threads.append(thread)
+    except KafkaUnavailable as exc:
+        LOGGER.error("Kafka integration disabled: %s", exc)
     server = CentralSocketServer(config.socket_host, config.socket_port, state)
     server.start()
 
@@ -56,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         LOGGER.info("Shutting down")
     finally:
+        for worker in workers:
+            worker.close()
         server.stop()
         db.close()
     return 0
@@ -63,3 +78,13 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def _poll_worker(worker: object) -> None:
+    # KafkaWorker catches handler failures and leaves the offset uncommitted.
+    while True:
+        try:
+            worker.poll_once(1.0)  # type: ignore[attr-defined]
+        except Exception:
+            LOGGER.exception("Kafka worker stopped")
+            return
