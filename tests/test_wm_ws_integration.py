@@ -117,6 +117,18 @@ class WMWSIntegrationTests(unittest.TestCase):
         self.engine.clear_failure()
         self.assertTrue(wait_until(lambda: self.state.status_of("WS_INT") is StationStatus.AVAILABLE))
 
+    def test_monitor_reregisters_after_central_restart(self) -> None:
+        self.assertTrue(wait_until(lambda: self.state.status_of("WS_INT") is StationStatus.AVAILABLE))
+        central_port = self.central.port
+
+        self.central.stop()
+        self.assertTrue(wait_until(lambda: self.state.status_of("WS_INT") is StationStatus.DISCONNECTED))
+
+        self.central = CentralSocketServer("127.0.0.1", central_port, self.state)
+        self.central.start()
+
+        self.assertTrue(wait_until(lambda: self.state.status_of("WS_INT") is StationStatus.AVAILABLE))
+
     def test_monitor_assignment_arguments_have_internal_defaults(self) -> None:
         config = parse_monitor_args(
             [

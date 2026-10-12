@@ -111,6 +111,18 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(controller.last_result.stopped_by, "manual")  # type: ignore[union-attr]
         self.assertFalse(engine.request_irrigation("operator-1", duration_seconds=1.0))
 
+    def test_close_closes_valve_and_stops_active_irrigation(self) -> None:
+        valve = SolenoidValve()
+        controller = IrrigationController("WS_001", valve, FlowMeter(12.0), telemetry_interval=0.05)
+        engine = WateringStationEngine(engine_config(), irrigation_controller=controller)
+        self.assertTrue(engine.request_irrigation("operator-1", duration_seconds=1.0))
+
+        engine.close()
+
+        self.assertFalse(valve.is_open)
+        self.assertTrue(controller.wait_until_finished(timeout=2))
+        self.assertEqual(controller.last_result.stopped_by, "manual")  # type: ignore[union-attr]
+
     def test_health_checks_work_while_irrigation_is_running(self) -> None:
         valve = SolenoidValve()
         controller = IrrigationController("WS_001", valve, FlowMeter(12.0), telemetry_interval=0.05)
