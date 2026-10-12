@@ -24,6 +24,7 @@ class IrrigationState(str, Enum):
 class IrrigationRequest:
     operator_id: str
     duration_seconds: float
+    request_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -54,12 +55,16 @@ class IrrigationController:
         flow_meter: FlowMeter,
         telemetry_interval: float,
         sleep_func: Callable[[float], None] = time.sleep,
+        telemetry_callback: Callable[[IrrigationTelemetry], None] | None = None,
+        result_callback: Callable[[IrrigationResult, str], None] | None = None,
     ) -> None:
         self.ws_id = ws_id
         self.valve = valve
         self.flow_meter = flow_meter
         self.telemetry_interval = telemetry_interval
         self.sleep_func = sleep_func
+        self.telemetry_callback = telemetry_callback
+        self.result_callback = result_callback
         self.state = IrrigationState.IDLE
         self.telemetry: list[IrrigationTelemetry] = []
         self.last_result: IrrigationResult | None = None
@@ -134,6 +139,8 @@ class IrrigationController:
             reading = self.flow_meter.advance(step)
             telemetry = self._build_telemetry(request.operator_id, reading, IrrigationState.WATERING.value)
             self.telemetry.append(telemetry)
+            if self.telemetry_callback:
+                self.telemetry_callback(telemetry)
             LOGGER.info(
                 "Flow rate = %.2f L/min, accumulated volume = %.2f L",
                 telemetry.flow_rate_lpm,
@@ -155,6 +162,11 @@ class IrrigationController:
                 accumulated_volume_liters=reading.accumulated_volume_liters,
                 stopped_by=stopped_by,
             )
+            result = self.last_result
+        if self.telemetry_callback:
+            self.telemetry_callback(final_telemetry)
+        if self.result_callback and result is not None:
+            self.result_callback(result, stopped_by)
         LOGGER.info("Irrigation stopped")
 
     def _build_telemetry(
