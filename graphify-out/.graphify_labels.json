@@ -1,1 +1,27 @@
-{"0": "Client Integration Tests", "1": "Engine Health Tests", "2": "State Manager Operations", "3": "Socket Server Tests", "4": "Shared Wire Protocol", "5": "Domain Models", "6": "Central Socket Server", "7": "SQLite Database Core", "8": "Monitor Wire Protocol", "9": "Database Fault Tests", "10": "Irrigation Database Tests", "11": "Protocol Framing Tests", "12": "Database Utilities", "13": "Database Query Mapping", "14": "Central Configuration", "15": "Station Database Tests", "16": "Socket Transport Tests", "17": "Station Registration", "18": "ADR State Model", "19": "Message Factory Tests", "20": "Test Clock Utility", "21": "ADR Data Integrity", "22": "Test Package Metadata", "23": "Central Package Metadata", "24": "Test Support Metadata", "25": "Engine Package Metadata", "26": "Graphify Workflow", "27": "Common Test Metadata", "28": "ADR Document", "29": "Project Contributor", "30": "Project Contributor"}
+{
+  "0": "WateringStationMonitor",
+  "1": "WateringStationEngine",
+  "2": "StateManager",
+  "3": "test_socket_server.py",
+  "4": "protocol.py",
+  "5": "database.py",
+  "6": "CentralSocketServer",
+  "7": "Database",
+  "8": "CentralClient",
+  "9": "Project handoff: WaterManagement",
+  "10": "IrrigationTests",
+  "11": "EngineServer",
+  "12": "README.md",
+  "14": "WM_WS_E/main.py",
+  "16": "SocketTests",
+  "18": "Effective Status Function",
+  "21": "Database-Enforced Invariants",
+  "22": "tests/__init__.py",
+  "23": "WM_Central/__init__.py",
+  "24": "WM_Central/tests/__init__.py",
+  "26": "Graphify Workflow",
+  "27": "common/tests/__init__.py",
+  "28": "ADR-001: WM_Central State Model and SQLite Schema",
+  "29": "Ahmad Bassam Oqaili",
+  "30": "Sarat Mu'taz Jaabari"
+}
