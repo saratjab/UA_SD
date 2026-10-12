@@ -75,11 +75,6 @@ def main(argv: list[str] | None = None) -> int:
         db.close()
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())
-
-
 def _poll_worker(worker: object) -> None:
     # KafkaWorker catches handler failures and leaves the offset uncommitted.
     while True:
@@ -88,3 +83,7 @@ def _poll_worker(worker: object) -> None:
         except Exception:
             LOGGER.exception("Kafka worker stopped")
             return
+
+
+if __name__ == "__main__":
+    sys.exit(main())

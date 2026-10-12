@@ -5,6 +5,7 @@ This is a distributed water-management system with a central controller and wate
 - WM_Central/ is the control center: configuration, socket server, state management, SQLite persistence, and monitoring.
 - WM_WS/WM_WS_M/ is the watering-station monitor: station registration with Central, engine health checks, and fault reporting/resolution.
 - WM_WS/WM_WS_E/ is the watering-station engine: irrigation control, flow metering, solenoid valve control, and monitor-message handling.
+- WM_FO/ is the field-operator CLI: it submits irrigation requests and displays authorization, progress, and completion events over Kafka.
 - common/protocol.py defines the shared framed socket protocol used across Central, monitor, and engine components.
 
 ### Core architecture
@@ -21,6 +22,7 @@ Key entry points:
 - Station engine (WM_WS/WM_WS_E/engine.py:18)
 - Irrigation controller (WM_WS/WM_WS_E/irrigation.py:49)
 - Station monitor (WM_WS/WM_WS_M/monitor.py:19)
+- Field Operator CLI (WM_FO/main.py:42)
 
 ### Behavioral constraints
 
@@ -37,9 +39,10 @@ ADR-001 is the most important design reference: state model and schema (docs/adr
 
 ### Current implementation boundaries
 
-- Kafka host/port arguments are accepted by Central and Engine entry points, but Kafka message consumption/production is not implemented yet.
-- Central has state-side block/activate and irrigation persistence APIs, but there is not yet a Kafka command path or operator-facing UI wired to them.
-- The runtime irrigation controller currently simulates the actuator and flow meter; Central's irrigation database lifecycle is tested separately from a live engine request path.
+- Central, Engine, and Field Operator have Kafka paths for activation requests, station commands/events, and operator notifications.
+- WM_FO supports interactive one-off requests and JSON/JSONL request files; file-driven requests wait for a terminal result and pause four seconds between requests.
+- The operator interface is currently a CLI. It displays request-level authorization, progress, denial, and completion events; it does not yet provide an independent station-status dashboard.
+- The runtime irrigation controller simulates the actuator and flow meter.
 
 ### Tests
 
