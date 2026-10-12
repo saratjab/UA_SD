@@ -18,10 +18,10 @@
     "semantic_hash": "67b9223b279209ebbdabe86ad0650044"
   },
   "WM_Central/database.py": {
-    "mtime": 1791278240.3383782,
-    "seen": 1791753559.9487495,
-    "ast_hash": "85e687a8552813f69ad8abf0aabeb05a",
-    "semantic_hash": "85e687a8552813f69ad8abf0aabeb05a"
+    "mtime": 1791806469.2548842,
+    "seen": 1791806669.8420024,
+    "ast_hash": "adabefee5b77d5150423c6c04b24305b",
+    "semantic_hash": ""
   },
   "WM_Central/db/schema.sql": {
     "mtime": 1791278146.7482069,
@@ -36,10 +36,10 @@
     "semantic_hash": ""
   },
   "WM_Central/main.py": {
-    "mtime": 1791278282.001742,
-    "seen": 1791753559.9487581,
-    "ast_hash": "4179993ee0f9a7f884f5730d9a76ac7b",
-    "semantic_hash": "4179993ee0f9a7f884f5730d9a76ac7b"
+    "mtime": 1791806469.256884,
+    "seen": 1791806669.8420098,
+    "ast_hash": "a9720cc3d104775c9c93b17ae9712fef",
+    "semantic_hash": ""
   },
   "WM_Central/models.py": {
     "mtime": 1791278244.2213857,
@@ -108,9 +108,9 @@
     "semantic_hash": ""
   },
   "WM_WS/WM_WS_E/engine.py": {
-    "mtime": 1791805052.8534408,
-    "seen": 1791805177.0041516,
-    "ast_hash": "835f6d7a011ead8bbd5b6f7c4e0e85f6",
+    "mtime": 1791806585.6321647,
+    "seen": 1791806669.8441026,
+    "ast_hash": "8c1973526815cf443d93aa4967e13469",
     "semantic_hash": ""
   },
   "WM_WS/WM_WS_E/flow_meter.py": {
@@ -120,16 +120,16 @@
     "semantic_hash": "eb2336ffde8fbcf224c93b8a14a3edfd"
   },
   "WM_WS/WM_WS_E/irrigation.py": {
-    "mtime": 1791801291.9817514,
-    "seen": 1791805177.0042896,
-    "ast_hash": "5bf551f4c3a3877f3876c7a0c2c57042",
+    "mtime": 1791806469.2588842,
+    "seen": 1791806669.8443134,
+    "ast_hash": "4c5c5386dadddbdeda0714726c83da93",
     "semantic_hash": ""
   },
   "WM_WS/WM_WS_E/main.py": {
-    "mtime": 1791146519.372625,
-    "seen": 1791753559.9487946,
-    "ast_hash": "cf8cfa6b838df4ee35df22765ccb57f2",
-    "semantic_hash": "cf8cfa6b838df4ee35df22765ccb57f2"
+    "mtime": 1791806469.2598965,
+    "seen": 1791806669.844321,
+    "ast_hash": "c9dcb44be076fdb9cf2b493ae224c9bc",
+    "semantic_hash": ""
   },
   "WM_WS/WM_WS_E/valve.py": {
     "mtime": 1791146519.372625,
@@ -264,15 +264,87 @@
     "semantic_hash": ""
   },
   "PROJECT_CONTEXT.md": {
-    "mtime": 1791753933.8112526,
-    "seen": 1791805177.0056334,
-    "ast_hash": "606575fd4598f1a69c7ff1ac154d8fae",
+    "mtime": 1791805413.842915,
+    "seen": 1791806669.8482437,
+    "ast_hash": "1d5ac5032785c27dc8ed3bb329f6b702",
     "semantic_hash": ""
   },
   "README.md": {
     "mtime": 1791146519.3705566,
     "seen": 1791805177.0056355,
     "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "WM_Central/kafka_service.py": {
+    "mtime": 1791806469.2563698,
+    "seen": 1791806669.8420064,
+    "ast_hash": "3b25489be1f9046507d277946d4d0371",
+    "semantic_hash": ""
+  },
+  "WM_Central/tests/test_kafka_service.py": {
+    "mtime": 1791806469.2576654,
+    "seen": 1791806669.8432243,
+    "ast_hash": "a312c5d994207eb0e53071d41a764dba",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_E/kafka_service.py": {
+    "mtime": 1791806469.2588842,
+    "seen": 1791806669.8443174,
+    "ast_hash": "13a195a005eb066ea913c90397e8f76d",
+    "semantic_hash": ""
+  },
+  "common/kafka_contract.py": {
+    "mtime": 1791806469.2604089,
+    "seen": 1791806669.8460433,
+    "ast_hash": "6d1f4a14cfeaa44c491a19b74157a5a0",
+    "semantic_hash": ""
+  },
+  "common/kafka_transport.py": {
+    "mtime": 1791806469.2608125,
+    "seen": 1791806669.8460472,
+    "ast_hash": "0391ff67cb599cc3d03af202aa9d1bcb",
+    "semantic_hash": ""
+  },
+  "common/tests/test_kafka_contract.py": {
+    "mtime": 1791806469.2612774,
+    "seen": 1791806669.8463907,
+    "ast_hash": "e952d5e3fc52c45af895dbbda1cd1156",
+    "semantic_hash": ""
+  },
+  "tests/test_engine_kafka_service.py": {
+    "mtime": 1791806469.2634184,
+    "seen": 1791806669.8468893,
+    "ast_hash": "5971909075dd74db0f801a7930d2d271",
+    "semantic_hash": ""
+  },
+  "tests/test_kafka_real_integration.py": {
+    "mtime": 1791806469.2638335,
+    "seen": 1791806669.8468926,
+    "ast_hash": "357ca6f62c1e08f07386bdc62fc02484",
+    "semantic_hash": ""
+  },
+  "docker-compose.kafka.yml": {
+    "mtime": 1791806469.2612774,
+    "seen": 1791806669.8483965,
+    "ast_hash": "65be15cdbcbf3cc8f300e118d6887db6",
+    "semantic_hash": ""
+  },
+  "docs/kafka-message-contract.md": {
+    "mtime": 1791806469.2618842,
+    "seen": 1791806669.8485827,
+    "ast_hash": "e95684a0fe6f62b5a68e7d9fa0c927c9",
+    "semantic_hash": ""
+  },
+  "prompts/kafka-irrigation-lifecycle.md": {
+    "mtime": 1791806469.2618842,
+    "seen": 1791806669.8485866,
+    "ast_hash": "9ff3f4c17d1e306c4eae30ca5ee02cc5",
+    "semantic_hash": ""
+  },
+  "requirements.txt": {
+    "mtime": 1791806469.2628841,
+    "seen": 1791806669.848589,
+    "ast_hash": "6dc17402907ff42e27faefea7778c320",
     "semantic_hash": ""
   }
 }

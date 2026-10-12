@@ -350,6 +350,24 @@ class Database:
             )
         return cursor.rowcount == 1
 
+    def add_terminal_measurements(
+        self, request_id: str, *, duration_s: float, total_volume_l: float,
+    ) -> bool:
+        """Attach a late Engine final reading without changing a safety terminal state.
+
+        A Monitor fault/block can close the row before the Engine completion reaches
+        Kafka.  The authoritative LEAK/BLOCKED state must win, but its real final
+        flow reading is still useful for audit.
+        """
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE irrigations SET duration_s = COALESCE(duration_s, ?), "
+                "total_volume_l = COALESCE(total_volume_l, ?) "
+                "WHERE request_id = ? AND status = 'ENDED'",
+                (duration_s, total_volume_l, request_id),
+            )
+        return cursor.rowcount == 1
+
     def end_live_irrigation(self, ws_id: str, end_reason: EndReason) -> IrrigationRecord | None:
         """Close whatever is live on a station (used when CENTRAL itself infers
         the end: disconnect, leak, block). Returns the closed record, if any."""
