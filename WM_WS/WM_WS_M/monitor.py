@@ -33,8 +33,7 @@ class WateringStationMonitor:
     def run(self) -> int:
         LOGGER.info("Starting WM_WS_M for WS ID %s", self.config.ws_id)
         try:
-            self.central_client.connect()
-            if not self.central_client.register():
+            if not self._ensure_central_registration():
                 return 1
 
             self.engine_server.start()
@@ -93,6 +92,10 @@ class WateringStationMonitor:
             time.sleep(self.config.health_interval)
 
     def perform_health_check(self, engine_socket: socket.socket, sequence: int) -> bool:
+        # CENTRAL closes all Monitor sockets when it restarts.  The protocol
+        # has no unsolicited CENTRAL messages, so renew registration before
+        # each health cycle to detect that closure and reconnect promptly.
+        self._ensure_central_registration()
         self._last_health_connection_usable = False
         message = protocol.health_check_message(self.config.ws_id, sequence)
         try:
@@ -160,6 +163,21 @@ class WateringStationMonitor:
             return self.central_client.report_fault(fault, details, utc_timestamp())
         except (OSError, protocol.ProtocolError) as exc:
             LOGGER.error("Failed to notify WM_Central about fault %s: %s", fault, exc)
+            return False
+
+    def _ensure_central_registration(self) -> bool:
+        """Verify the Central socket and re-register after a restart."""
+        try:
+            return self.central_client.register()
+        except (OSError, protocol.ProtocolError, RuntimeError) as exc:
+            LOGGER.warning("WM_Central connection lost; reconnecting: %s", exc)
+
+        self.central_client.close()
+        try:
+            self.central_client.connect()
+            return self.central_client.register()
+        except (OSError, protocol.ProtocolError, RuntimeError) as exc:
+            LOGGER.error("Could not reconnect to WM_Central: %s", exc)
             return False
 
 

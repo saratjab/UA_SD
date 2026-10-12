@@ -14,6 +14,15 @@ class FakeCentralClient:
         self.faults: list[tuple[str, str, str]] = []
         self.resolutions: list[str] = []
 
+    def connect(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def register(self) -> bool:
+        return True
+
     def report_fault(self, fault: str, details: str, timestamp: str) -> bool:
         self.faults.append((fault, details, timestamp))
         return True
