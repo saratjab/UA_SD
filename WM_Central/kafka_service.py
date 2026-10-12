@@ -146,7 +146,12 @@ class CentralKafkaService:
         return True
 
     def _notify(self, operator_id: str | None, request_id: str, ws_id: str, event_type: str, payload: dict[str, Any]) -> None:
-        if operator_id: self.publisher.publish(OPERATOR_EVENTS, envelope(event_type, payload, operator_id=operator_id, request_id=request_id, ws_id=ws_id))
+        if operator_id:
+            self.publisher.publish(
+                OPERATOR_EVENTS,
+                envelope(event_type, payload, operator_id=operator_id, request_id=request_id, ws_id=ws_id),
+                key=operator_id,
+            )
 
     @staticmethod
     def _require(message: dict[str, Any], *fields: str) -> None:

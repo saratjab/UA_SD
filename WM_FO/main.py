@@ -70,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     config = parse_args(argv)
     bootstrap = f"{config.kafka_host}:{config.kafka_port}"
     worker = None
+    publisher = None
     try:
         publisher = KafkaPublisher(bootstrap)
         operator = FieldOperator(config.operator_id, publisher)
@@ -84,6 +85,9 @@ def main(argv: list[str] | None = None) -> int:
             _file_mode(operator, config.request_file, config.request_timeout)
         elif config.ws_id:
             _submit_and_wait(operator, config.ws_id, config.duration_seconds or 0, config.request_timeout)
+            # The command-line request starts the operator session; it should not
+            # make the long-running Kafka consumer exit when that request ends.
+            _interactive_mode(operator, config.request_timeout)
         else:
             _interactive_mode(operator, config.request_timeout)
     except (OSError, ValueError) as exc:
@@ -94,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if worker is not None:
             worker.close()
+        if publisher is not None:
+            publisher.close()
     return 0
 
 

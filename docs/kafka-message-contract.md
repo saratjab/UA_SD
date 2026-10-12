@@ -5,6 +5,9 @@ ISO-8601 `timestamp`, object `payload`, and the applicable `ws_id`,
 `operator_id`, and `request_id`. Consumers reject malformed envelopes. All
 durations are seconds and all volumes are litres.
 
+Kafka keys preserve per-entity ordering: activation requests use `ws_id`, and
+operator events use `operator_id`.
+
 | Topic | Producer -> consumer | Event types |
 | --- | --- | --- |
 | `wm.activation.requests` | FO -> Central | `ACTIVATION_REQUEST` |
