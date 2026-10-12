@@ -50,6 +50,10 @@ class WateringStationEngine:
 
     def close(self) -> None:
         self._stop_event.set()
+        # Shutting down the Engine must leave the actuator in its safe state.
+        # Closing the Monitor socket alone would let an in-flight irrigation
+        # thread keep the valve open until its scheduled duration elapsed.
+        self.irrigation.emergency_stop()
         if self.monitor_socket is not None:
             self.monitor_socket.close()
             self.monitor_socket = None
