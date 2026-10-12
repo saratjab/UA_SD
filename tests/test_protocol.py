@@ -3,10 +3,18 @@ from __future__ import annotations
 import socket
 import unittest
 
-from WM_WS.WM_WS_M import protocol
+from common import protocol
+from WM_WS.WM_WS_E import engine
+from WM_WS.WM_WS_M import central_client, monitor, ws_e_server
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_ws_components_import_the_shared_protocol(self) -> None:
+        self.assertIs(engine.protocol, protocol)
+        self.assertIs(central_client.protocol, protocol)
+        self.assertIs(monitor.protocol, protocol)
+        self.assertIs(ws_e_server.protocol, protocol)
+
     def test_lrc_calculation(self) -> None:
         self.assertEqual(protocol.calculate_lrc(b"ABC"), 64)
 

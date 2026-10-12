@@ -4,7 +4,7 @@ import socket
 import threading
 import unittest
 
-from WM_WS.WM_WS_M import protocol
+from common import protocol
 from WM_WS.WM_WS_M.central_client import CentralClient
 
 
@@ -32,7 +32,7 @@ class CentralClientTests(unittest.TestCase):
 
         thread = threading.Thread(target=server)
         thread.start()
-        client = CentralClient("unused", 0, "WS_001")
+        client = CentralClient("unused", 0, "WS_001", "North Garden")
         client.sock = client_sock
         try:
             self.assertTrue(client.report_fault("timeout", "No response", "2026-10-04T13:30:00Z"))
@@ -54,7 +54,7 @@ class CentralClientTests(unittest.TestCase):
 
         thread = threading.Thread(target=server)
         thread.start()
-        client = CentralClient("unused", 0, "WS_001")
+        client = CentralClient("unused", 0, "WS_001", "North Garden")
         client.sock = client_sock
         try:
             result = client.register()

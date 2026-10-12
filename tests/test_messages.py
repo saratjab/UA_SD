@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import unittest
 
-from WM_WS.WM_WS_M import protocol
+from common import protocol
 
 
 class MessageFactoryTests(unittest.TestCase):
     def test_register_ws(self) -> None:
-        self.assertEqual(protocol.register_ws_message("WS_001"), {"type": "REGISTER_WS", "ws_id": "WS_001"})
+        self.assertEqual(
+            protocol.register_ws_message("WS_001", "North Garden"),
+            {"type": "REGISTER_WS", "ws_id": "WS_001", "location": "North Garden"},
+        )
 
     def test_register_ack_shape_from_central(self) -> None:
         frame = protocol.create_frame({"type": "REGISTER_ACK", "ws_id": "WS_001", "status": "OK"})

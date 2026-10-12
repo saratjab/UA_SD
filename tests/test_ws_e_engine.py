@@ -5,7 +5,7 @@ import threading
 import unittest
 from unittest import mock
 
-from WM_WS.WM_WS_M import protocol
+from common import protocol
 from WM_WS.WM_WS_E.config import EngineConfig
 from WM_WS.WM_WS_E.engine import WateringStationEngine
 from WM_WS.WM_WS_E.flow_meter import FlowMeter
@@ -63,6 +63,26 @@ class EngineTests(unittest.TestCase):
             engine_sock.close()
             monitor_sock.close()
 
+    def test_engine_without_ws_id_adopts_assignment_from_hello_ack(self) -> None:
+        engine_sock, monitor_sock = socket.socketpair()
+        config = EngineConfig(**{**engine_config().__dict__, "ws_id": None})
+        engine = WateringStationEngine(config)
+
+        def monitor() -> None:
+            self.assertEqual(protocol.receive_message(monitor_sock), {"type": "HELLO_WS_E", "component": "WM_WS_E"})
+            protocol.send_message(monitor_sock, {"type": "HELLO_ACK", "ws_id": "WS_001", "status": "OK"})
+
+        thread = threading.Thread(target=monitor)
+        thread.start()
+        try:
+            self.assertTrue(engine.send_hello(engine_sock))
+            self.assertEqual(engine.config.ws_id, "WS_001")
+            self.assertEqual(engine.irrigation.ws_id, "WS_001")
+        finally:
+            thread.join(timeout=2)
+            engine_sock.close()
+            monitor_sock.close()
+
     def test_health_check_produces_health_ok(self) -> None:
         engine = WateringStationEngine(engine_config())
         response = engine.handle_monitor_message({"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 4})
@@ -79,6 +99,17 @@ class EngineTests(unittest.TestCase):
         response = engine.handle_monitor_message({"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 5})
         self.assertEqual(response["type"], "HEALTH_KO")  # type: ignore[index]
         self.assertEqual(response["reason"], "simulated_failure")  # type: ignore[index]
+
+    def test_failure_closes_valve_and_stops_active_irrigation(self) -> None:
+        valve = SolenoidValve()
+        controller = IrrigationController("WS_001", valve, FlowMeter(12.0), telemetry_interval=0.05)
+        engine = WateringStationEngine(engine_config(), irrigation_controller=controller)
+        self.assertTrue(engine.request_irrigation("operator-1", duration_seconds=1.0))
+        engine.simulate_failure()
+        self.assertFalse(valve.is_open)
+        self.assertTrue(controller.wait_until_finished(timeout=2))
+        self.assertEqual(controller.last_result.stopped_by, "manual")  # type: ignore[union-attr]
+        self.assertFalse(engine.request_irrigation("operator-1", duration_seconds=1.0))
 
     def test_health_checks_work_while_irrigation_is_running(self) -> None:
         valve = SolenoidValve()
@@ -179,4 +210,3 @@ class IrrigationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

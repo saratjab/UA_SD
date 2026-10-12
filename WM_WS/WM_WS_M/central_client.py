@@ -5,17 +5,18 @@ import socket
 from types import TracebackType
 from typing import Any
 
-from . import protocol
+from common import protocol
 
 
 LOGGER = logging.getLogger(__name__)
 
 
 class CentralClient:
-    def __init__(self, host: str, port: int, ws_id: str, timeout: float = 5.0) -> None:
+    def __init__(self, host: str, port: int, ws_id: str, location: str = "", timeout: float = 5.0) -> None:
         self.host = host
         self.port = port
         self.ws_id = ws_id
+        self.location = location
         self.timeout = timeout
         self.sock: socket.socket | None = None
 
@@ -43,7 +44,7 @@ class CentralClient:
 
     def register(self) -> bool:
         sock = self._require_socket()
-        protocol.send_message(sock, protocol.register_ws_message(self.ws_id))
+        protocol.send_message(sock, protocol.register_ws_message(self.ws_id, self.location))
         response = protocol.receive_message(sock)
         response_type = response.get("type")
 
@@ -70,6 +71,12 @@ class CentralClient:
         protocol.send_message(sock, message)
         response = protocol.receive_message(sock)
         return self._handle_fault_response(response)
+
+    def report_fault_resolved(self, timestamp: str) -> bool:
+        sock = self._require_socket()
+        LOGGER.info("Reporting WM_WS_E fault resolution to WM_Central")
+        protocol.send_message(sock, protocol.fault_resolved_message(self.ws_id, timestamp))
+        return self._handle_fault_response(protocol.receive_message(sock))
 
     def _handle_fault_response(self, response: dict[str, Any]) -> bool:
         response_type = response.get("type")

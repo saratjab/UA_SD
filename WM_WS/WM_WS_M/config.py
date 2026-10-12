@@ -14,11 +14,13 @@ class MonitorConfig:
     engine_hello_timeout: float
     health_interval: float
     health_timeout: float
+    location: str = ""
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="WaterManagement Watering Station Monitor")
     parser.add_argument("--ws-id", required=True, help="Watering Station ID")
+    parser.add_argument("--location", default="", help="Watering Station location")
     parser.add_argument("--central-host", required=True, help="WM_Central TCP host")
     parser.add_argument("--central-port", required=True, type=int, help="WM_Central TCP port")
     parser.add_argument(
@@ -34,20 +36,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--engine-hello-timeout",
-        required=True,
         type=float,
+        default=5.0,
         help="Seconds to wait for WM_WS_E HELLO_WS_E after accepting a connection",
     )
     parser.add_argument(
         "--health-interval",
-        required=True,
         type=float,
+        default=5.0,
         help="Seconds between health checks",
     )
     parser.add_argument(
         "--health-timeout",
-        required=True,
         type=float,
+        default=2.0,
         help="Seconds to wait for a health response",
     )
     return parser
@@ -64,4 +66,5 @@ def parse_args(argv: list[str] | None = None) -> MonitorConfig:
         engine_hello_timeout=args.engine_hello_timeout,
         health_interval=args.health_interval,
         health_timeout=args.health_timeout,
+        location=args.location,
     )
