@@ -2261,7 +2261,7 @@
       "file_type": "code",
       "norm_label": "_poll_worker()",
       "source_file": "WM_Central/main.py",
-      "source_location": "L83"
+      "source_location": "L78"
     },
     {
       "id": "wm_central_state_manager_statemanager_connected_ws_ids",
@@ -2609,7 +2609,7 @@
       "file_type": "code",
       "norm_label": "._number()",
       "source_file": "WM_Central/kafka_service.py",
-      "source_location": "L156"
+      "source_location": "L161"
     },
     {
       "id": "wm_central_kafka_service_centralkafkaservice_require",
@@ -2621,7 +2621,7 @@
       "file_type": "code",
       "norm_label": "._require()",
       "source_file": "WM_Central/kafka_service.py",
-      "source_location": "L152"
+      "source_location": "L157"
     },
     {
       "id": "wm_central_kafka_service_centralkafkaservice_telemetry",
@@ -7251,7 +7251,7 @@
       "node_kind": "heading",
       "norm_label": "fo request and response interface",
       "source_file": "docs/kafka-message-contract.md",
-      "source_location": "L15"
+      "source_location": "L18"
     },
     {
       "id": "docs_kafka_message_contract_local_development",
@@ -7263,7 +7263,7 @@
       "node_kind": "heading",
       "norm_label": "local development",
       "source_file": "docs/kafka-message-contract.md",
-      "source_location": "L50"
+      "source_location": "L53"
     },
     {
       "id": "docs_kafka_message_contract_watermanagement_kafka_message_contract",
@@ -8839,7 +8839,7 @@
       "node_kind": "heading",
       "norm_label": "behavioral constraints",
       "source_file": "PROJECT_CONTEXT.md",
-      "source_location": "L25"
+      "source_location": "L27"
     },
     {
       "id": "project_context_core_architecture",
@@ -8851,7 +8851,7 @@
       "node_kind": "heading",
       "norm_label": "core architecture",
       "source_file": "PROJECT_CONTEXT.md",
-      "source_location": "L10"
+      "source_location": "L11"
     },
     {
       "id": "project_context_current_implementation_boundaries",
@@ -8863,7 +8863,7 @@
       "node_kind": "heading",
       "norm_label": "current implementation boundaries",
       "source_file": "PROJECT_CONTEXT.md",
-      "source_location": "L38"
+      "source_location": "L40"
     },
     {
       "id": "project_context_project_handoff_watermanagement",
@@ -8887,7 +8887,7 @@
       "node_kind": "heading",
       "norm_label": "suggested first pass for a new codex",
       "source_file": "PROJECT_CONTEXT.md",
-      "source_location": "L54"
+      "source_location": "L57"
     },
     {
       "id": "project_context_tests",
@@ -8899,7 +8899,7 @@
       "node_kind": "heading",
       "norm_label": "tests",
       "source_file": "PROJECT_CONTEXT.md",
-      "source_location": "L44"
+      "source_location": "L47"
     },
     {
       "id": "docs_adr_adr_001_state_model_and_schema_effective_status",
@@ -11831,7 +11831,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "WM_Central/kafka_service.py",
-      "source_location": "L149",
+      "source_location": "L152",
       "weight": 1.0
     },
     {
@@ -11843,7 +11843,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "WM_Central/kafka_service.py",
-      "source_location": "L158",
+      "source_location": "L163",
       "weight": 1.0
     },
     {
@@ -11855,7 +11855,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "WM_Central/kafka_service.py",
-      "source_location": "L154",
+      "source_location": "L159",
       "weight": 1.0
     },
     {
@@ -13895,7 +13895,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "WM_FO/main.py",
-      "source_location": "L74",
+      "source_location": "L75",
       "weight": 1.0
     },
     {
@@ -13907,7 +13907,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "WM_FO/main.py",
-      "source_location": "L75",
+      "source_location": "L76",
       "weight": 1.0
     },
     {
@@ -13919,7 +13919,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "WM_FO/main.py",
-      "source_location": "L78",
+      "source_location": "L79",
       "weight": 1.0
     },
     {
@@ -13931,7 +13931,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "WM_FO/main.py",
-      "source_location": "L84",
+      "source_location": "L85",
       "weight": 1.0
     },
     {
@@ -13943,7 +13943,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "WM_FO/main.py",
-      "source_location": "L86",
+      "source_location": "L87",
       "weight": 1.0
     },
     {
@@ -13955,7 +13955,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "WM_FO/main.py",
-      "source_location": "L88",
+      "source_location": "L90",
       "weight": 1.0
     },
     {
@@ -15047,7 +15047,7 @@
       "confidence_score": 1.0,
       "context": "generic_arg",
       "source_file": "WM_Central/kafka_service.py",
-      "source_location": "L156",
+      "source_location": "L161",
       "weight": 1.0
     },
     {
@@ -15059,7 +15059,7 @@
       "confidence_score": 1.0,
       "context": "generic_arg",
       "source_file": "WM_Central/kafka_service.py",
-      "source_location": "L152",
+      "source_location": "L157",
       "weight": 1.0
     },
     {
@@ -21706,7 +21706,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "docs/kafka-message-contract.md",
-      "source_location": "L15",
+      "source_location": "L18",
       "weight": 1.0
     },
     {
@@ -21717,7 +21717,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "docs/kafka-message-contract.md",
-      "source_location": "L50",
+      "source_location": "L53",
       "weight": 1.0
     },
     {
@@ -21739,7 +21739,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "PROJECT_CONTEXT.md",
-      "source_location": "L10",
+      "source_location": "L11",
       "weight": 1.0
     },
     {
@@ -21750,7 +21750,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "PROJECT_CONTEXT.md",
-      "source_location": "L25",
+      "source_location": "L27",
       "weight": 1.0
     },
     {
@@ -21761,7 +21761,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "PROJECT_CONTEXT.md",
-      "source_location": "L38",
+      "source_location": "L40",
       "weight": 1.0
     },
     {
@@ -21772,7 +21772,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "PROJECT_CONTEXT.md",
-      "source_location": "L44",
+      "source_location": "L47",
       "weight": 1.0
     },
     {
@@ -21783,7 +21783,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "PROJECT_CONTEXT.md",
-      "source_location": "L54",
+      "source_location": "L57",
       "weight": 1.0
     },
     {
@@ -23268,7 +23268,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "WM_Central/main.py",
-      "source_location": "L83",
+      "source_location": "L78",
       "weight": 1.0
     },
     {
@@ -25809,7 +25809,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "WM_Central/kafka_service.py",
-      "source_location": "L152",
+      "source_location": "L157",
       "weight": 1.0
     },
     {
@@ -25820,7 +25820,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "WM_Central/kafka_service.py",
-      "source_location": "L156",
+      "source_location": "L161",
       "weight": 1.0
     },
     {
@@ -28788,7 +28788,7 @@
       "confidence_score": 0.85,
       "context": "argument",
       "source_file": "WM_FO/main.py",
-      "source_location": "L78",
+      "source_location": "L79",
       "weight": 1.0
     },
     {
@@ -30432,7 +30432,7 @@
       "confidence_score": 0.85,
       "context": "call",
       "source_file": "WM_FO/main.py",
-      "source_location": "L76",
+      "source_location": "L77",
       "weight": 1.0
     },
     {
@@ -31568,7 +31568,7 @@
       "confidence": "INFERRED",
       "confidence_score": 0.95,
       "source_file": "WM_FO/main.py",
-      "source_location": "L79",
+      "source_location": "L80",
       "weight": 0.8
     },
     {
@@ -31887,5 +31887,5 @@
       "source_file": "docs/adr/ADR-001-state-model-and-schema.md"
     }
   ],
-  "built_at_commit": "a29e52e1e6c966e51c50b7cfb53b2e1c1e082495"
+  "built_at_commit": "4a1ab5d6a02d60f9b564c893ca96724a6bd07b86"
 }

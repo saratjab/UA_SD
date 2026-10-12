@@ -12,7 +12,7 @@ from .helpers import DatabaseTestCase
 class FakePublisher:
     def __init__(self) -> None:
         self.records: list[tuple[str, dict]] = []
-    def publish(self, topic: str, message: dict) -> None:
+    def publish(self, topic: str, message: dict, *, key: str | None = None) -> None:
         self.records.append((topic, message))
 
 

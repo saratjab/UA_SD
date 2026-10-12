@@ -27,12 +27,12 @@ class KafkaPublisher:
             producer = Producer({"bootstrap.servers": bootstrap_servers, "enable.idempotence": True})
         self._producer = producer
 
-    def publish(self, topic: str, message: dict[str, Any]) -> None:
+    def publish(self, topic: str, message: dict[str, Any], *, key: str | None = None) -> None:
         delivered: list[Exception] = []
         def report(err: Any, _msg: Any) -> None:
             if err:
                 delivered.append(RuntimeError(str(err)))
-        self._producer.produce(topic, encode(message), on_delivery=report)
+        self._producer.produce(topic, encode(message), key=key, on_delivery=report)
         # Commands/results are state-changing. Wait for the delivery callback so a
         # caller never commits its source offset merely because the record was
         # accepted into a local client buffer.

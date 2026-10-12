@@ -34,7 +34,7 @@ class FieldOperator:
         message = envelope("ACTIVATION_REQUEST", {"duration_seconds": duration_seconds},
                            ws_id=ws_id, operator_id=self.operator_id, request_id=request_id)
         try:
-            self.publisher.publish(ACTIVATION_REQUESTS, message)
+            self.publisher.publish(ACTIVATION_REQUESTS, message, key=ws_id)
         except Exception:
             with self._lock:
                 self._pending.pop(request_id, None)

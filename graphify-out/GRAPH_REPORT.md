@@ -1,9 +1,9 @@
 # Graph Report - UA_SD  (2026-10-12)
 
 ## Corpus Check
-- 62 files · ~23,526 words
+- 62 files · ~23,624 words
 - Verdict: corpus is large enough that graph structure adds value.
-- Unclassified: 2 file(s) not represented in the graph (top: (none) 1, .db-shm 1)
+- Unclassified: 1 file(s) not represented in the graph (top: (none) 1)
 
 ## Summary
 - 779 nodes · 1942 edges · 58 communities (33 shown, 25 thin omitted)
@@ -11,7 +11,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `a29e52e1`
+- Built from commit: `4a1ab5d6`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
