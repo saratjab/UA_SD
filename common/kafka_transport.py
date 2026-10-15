@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Callable
 
 from .kafka_contract import encode
@@ -48,18 +49,27 @@ class KafkaPublisher:
 
 class KafkaWorker:
     """Manual-commit polling loop. Handler success is the commit boundary."""
-    def __init__(self, bootstrap_servers: str, group_id: str, topics: list[str], handler: Callable[[bytes], bool], consumer: Any | None = None) -> None:
+    def __init__(self, bootstrap_servers: str, group_id: str, topics: list[str], handler: Callable[[bytes], bool], consumer: Any | None = None, *, auto_offset_reset: str = "earliest") -> None:
         if consumer is None:
             if Consumer is None:
                 raise KafkaUnavailable("confluent-kafka is not installed")
             consumer = Consumer({"bootstrap.servers": bootstrap_servers, "group.id": group_id,
-                                 "enable.auto.commit": False, "auto.offset.reset": "earliest"})
+                                 "enable.auto.commit": False, "auto.offset.reset": auto_offset_reset})
         self._consumer, self._topics, self._handler = consumer, topics, handler
         self._running = False
 
     def start(self) -> None:
         self._consumer.subscribe(self._topics)
         self._running = True
+
+    def wait_until_assigned(self, timeout: float = 10.0) -> bool:
+        """Poll until Kafka assigns this consumer's subscribed partitions."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._consumer.assignment():
+                return True
+            self.poll_once(min(0.1, max(0.0, deadline - time.monotonic())))
+        return bool(self._consumer.assignment())
 
     def poll_once(self, timeout: float = 1.0) -> bool:
         msg = self._consumer.poll(timeout)
