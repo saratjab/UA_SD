@@ -114,16 +114,23 @@ class CentralKafkaService:
         elif event_type == "IRRIGATION_COMPLETED":
             reason = {"TIME_LIMIT": EndReason.DURATION, "MANUAL_STOP": EndReason.MANUAL,
                       "CENTRAL_STOP": EndReason.MANUAL, "STATION_BLOCKED": EndReason.BLOCKED,
-                      "LEAK_DETECTED": EndReason.LEAK, "ENGINE_FAULT": EndReason.LEAK}.get(payload.get("end_reason"))
+                      "LEAK_DETECTED": EndReason.LEAK, "ENGINE_FAULT": EndReason.LEAK,
+                      "MONITOR_DISCONNECTED": EndReason.DISCONNECTED}.get(payload.get("end_reason"))
             if reason is None: raise MessageValidationError("invalid completion end_reason")
             duration, volume = self._number(payload, "duration_seconds"), self._number(payload, "accumulated_volume_liters")
             if self.db.end_irrigation(request_id, reason, duration_s=duration, total_volume_l=volume, ended_at=message["timestamp"]):
                 self._notify(record.operator_id, request_id, ws_id, "IRRIGATION_COMPLETED", payload)
             else:
-                self.db.add_terminal_measurements(request_id, duration_s=duration, total_volume_l=volume)
+                self.db.add_terminal_measurements(
+                    request_id, duration_s=duration, total_volume_l=volume, ended_at=message["timestamp"]
+                )
         elif event_type == "COMMAND_REJECTED":
-            self.db.end_irrigation(request_id, EndReason.MANUAL)
-            self._notify(record.operator_id, request_id, ws_id, "COMMAND_REJECTED", payload)
+            reason = {"ENGINE_BLOCKED": DenyReason.ENGINE_BLOCKED,
+                      "ENGINE_FAILED": DenyReason.ENGINE_FAILED}.get(payload.get("reason"))
+            if reason is None:
+                raise MessageValidationError("invalid command rejection reason")
+            if self.db.reject_authorized_irrigation(request_id, reason):
+                self._notify(record.operator_id, request_id, ws_id, "COMMAND_REJECTED", payload)
         else: raise MessageValidationError("unsupported Engine event_type")
 
     def _telemetry(self, record: Any, message: dict[str, Any]) -> None:

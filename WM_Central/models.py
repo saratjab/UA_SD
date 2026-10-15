@@ -40,6 +40,8 @@ class DenyReason(str, Enum):
     WS_OUT_OF_SERVICE = "WS_OUT_OF_SERVICE"
     WS_BUSY = "WS_BUSY"
     OPERATOR_INACTIVE = "OPERATOR_INACTIVE"
+    ENGINE_BLOCKED = "ENGINE_BLOCKED"
+    ENGINE_FAILED = "ENGINE_FAILED"
 
 
 class EndReason(str, Enum):

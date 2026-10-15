@@ -122,7 +122,54 @@ class Database:
     def initialize(self) -> None:
         """Create tables/indexes if missing (schema.sql is idempotent)."""
         with self._lock:
-            self._conn().executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            conn = self._conn()
+            self._migrate_engine_rejection_reasons(conn)
+            conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _migrate_engine_rejection_reasons(conn: sqlite3.Connection) -> None:
+        """Extend deny_reason CHECK while preserving existing irrigation rows."""
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='irrigations'"
+        ).fetchone()
+        if row is None or ("ENGINE_BLOCKED" in row["sql"] and "ENGINE_FAILED" in row["sql"]):
+            return
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("ALTER TABLE irrigations RENAME TO irrigations_legacy")
+            conn.execute("""CREATE TABLE irrigations (
+                irrigation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id TEXT NOT NULL UNIQUE,
+                ws_id TEXT NOT NULL REFERENCES watering_stations (ws_id),
+                operator_id TEXT REFERENCES operators (operator_id),
+                status TEXT NOT NULL CHECK (status IN ('DENIED', 'AUTHORIZED', 'WATERING', 'ENDED')),
+                deny_reason TEXT CHECK (deny_reason IN ('WS_DISCONNECTED', 'WS_LEAK', 'WS_OUT_OF_SERVICE', 'WS_BUSY', 'OPERATOR_INACTIVE', 'ENGINE_BLOCKED', 'ENGINE_FAILED')),
+                requested_duration_s INTEGER CHECK (requested_duration_s IS NULL OR requested_duration_s > 0),
+                requested_at TEXT NOT NULL,
+                started_at TEXT,
+                ended_at TEXT,
+                duration_s REAL,
+                total_volume_l REAL CHECK (total_volume_l IS NULL OR total_volume_l >= 0),
+                end_reason TEXT CHECK (end_reason IN ('DURATION', 'MANUAL', 'LEAK', 'BLOCKED', 'DISCONNECTED', 'CENTRAL_RESTART')),
+                CHECK ((status = 'DENIED') = (deny_reason IS NOT NULL)),
+                CHECK ((status = 'ENDED') = (end_reason IS NOT NULL)),
+                CHECK (status <> 'ENDED' OR ended_at IS NOT NULL)
+            )""")
+            conn.execute("""INSERT INTO irrigations
+                (irrigation_id, request_id, ws_id, operator_id, status, deny_reason,
+                 requested_duration_s, requested_at, started_at, ended_at, duration_s,
+                 total_volume_l, end_reason)
+                SELECT irrigation_id, request_id, ws_id, operator_id, status, deny_reason,
+                       requested_duration_s, requested_at, started_at, ended_at, duration_s,
+                       total_volume_l, end_reason FROM irrigations_legacy""")
+            conn.execute("DROP TABLE irrigations_legacy")
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
 
     def load_seed_file(self, path: str | Path = SEED_DEV_PATH) -> None:
         """Run a seed script (dev/demo data only)."""
@@ -325,6 +372,18 @@ class Database:
             )
         return cursor.rowcount == 1
 
+    def reject_authorized_irrigation(self, request_id: str, reason: DenyReason) -> bool:
+        """Record an Engine rejection before watering as DENIED, not ENDED."""
+        if reason not in {DenyReason.ENGINE_BLOCKED, DenyReason.ENGINE_FAILED}:
+            raise ValueError("reason must describe an Engine start rejection")
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE irrigations SET status = 'DENIED', deny_reason = ? "
+                "WHERE request_id = ? AND status = 'AUTHORIZED'",
+                (reason.value, request_id),
+            )
+        return cursor.rowcount == 1
+
     def end_irrigation(
         self,
         request_id: str,
@@ -352,6 +411,7 @@ class Database:
 
     def add_terminal_measurements(
         self, request_id: str, *, duration_s: float, total_volume_l: float,
+        ended_at: str | None = None,
     ) -> bool:
         """Attach a late Engine final reading without changing a safety terminal state.
 
@@ -362,9 +422,10 @@ class Database:
         with self.transaction() as conn:
             cursor = conn.execute(
                 "UPDATE irrigations SET duration_s = COALESCE(duration_s, ?), "
-                "total_volume_l = COALESCE(total_volume_l, ?) "
+                "total_volume_l = COALESCE(total_volume_l, ?), "
+                "ended_at = COALESCE(?, ended_at) "
                 "WHERE request_id = ? AND status = 'ENDED'",
-                (duration_s, total_volume_l, request_id),
+                (duration_s, total_volume_l, ended_at, request_id),
             )
         return cursor.rowcount == 1
 
