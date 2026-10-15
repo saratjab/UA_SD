@@ -68,10 +68,30 @@ Facts that constrain the design:
 
 6. **End reasons are split by who can observe them.** Engine-reported: `DURATION`,
    `MANUAL`, `LEAK`, `BLOCKED`. CENTRAL-inferred (no final event can arrive):
-   `DISCONNECTED`, `CENTRAL_RESTART`. On every start CENTRAL closes any
+   `DISCONNECTED`, `CENTRAL_RESTART`. An Engine rejection before watering is
+   recorded as `DENIED` with `ENGINE_BLOCKED` or `ENGINE_FAILED`; it is not an
+   ended irrigation. On every start CENTRAL closes any
    AUTHORIZED/WATERING row as `CENTRAL_RESTART`.
+   If CENTRAL first ends a row for a fault, block, or disconnect and a final
+   Engine completion later arrives, the safety end reason remains authoritative,
+   while the completion supplies the actual valve-stop `ended_at` and final
+   measurements. If no completion arrives (for example, an Engine crash), the
+   Central detection timestamp remains and measurements stay NULL.
 
 ## Options Considered
+
+## Administrative station commands (open interface decision)
+
+Central currently has an internal `issue_station_command()` Kafka adapter for
+`BLOCK_WS` and `ACTIVATE_WS`, but the README, requirements, Kafka contract, and
+existing ADRs define no operator-facing administrative interface or caller.
+The Monitor socket is a Monitor registration/fault protocol, so it must not be
+extended with administrator messages by inference. Before exposing these
+controls, decide whether administrators use a local Central CLI, a separate
+authenticated API, or another specified interface. The interface must persist
+BLOCKED state before acknowledging, stop active watering, and refuse activation
+while a fault is open or the station is disconnected. The Python adapter alone
+is not an administrative interface.
 
 ### Option A: single `status` column per station (plan 20.1)
 
