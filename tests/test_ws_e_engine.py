@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -137,10 +138,27 @@ class EngineTests(unittest.TestCase):
 
     def test_monitor_disconnection_is_handled_safely(self) -> None:
         engine_sock, monitor_sock = socket.socketpair()
-        engine = WateringStationEngine(engine_config())
+        valve = SolenoidValve()
+        results = []
+        controller = IrrigationController(
+            "WS_001", valve, FlowMeter(12.0), telemetry_interval=0.05,
+            result_callback=lambda result, reason: results.append((result, reason)),
+        )
+        engine = WateringStationEngine(engine_config(), irrigation_controller=controller)
         engine.monitor_socket = engine_sock
+        self.assertTrue(engine.request_irrigation("operator-1", duration_seconds=30.0))
+        self.assertTrue(valve.is_open)
+        time.sleep(0.07)  # establish a non-zero final reading before the fault
+
         monitor_sock.close()
         engine.handle_monitor_messages()
+
+        self.assertFalse(valve.is_open)
+        self.assertTrue(controller.wait_until_finished(timeout=1))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][1], "monitor_disconnected")
+        self.assertGreater(results[0][0].duration_seconds, 0)
+        self.assertGreater(results[0][0].accumulated_volume_liters, 0)
         engine.close()
 
     def test_invalid_monitor_message_is_rejected(self) -> None:

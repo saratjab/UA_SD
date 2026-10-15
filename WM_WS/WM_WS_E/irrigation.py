@@ -70,6 +70,7 @@ class IrrigationController:
         self.last_result: IrrigationResult | None = None
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._stop_reason = "manual"
         self._thread: threading.Thread | None = None
 
     def start(self, request: IrrigationRequest) -> bool:
@@ -84,6 +85,7 @@ class IrrigationController:
             self.telemetry = []
             self.flow_meter.reset()
             self._stop_event.clear()
+            self._stop_reason = "manual"
             self.valve.open()
             LOGGER.info("Irrigation started")
             self._thread = threading.Thread(
@@ -102,12 +104,14 @@ class IrrigationController:
             self._stop_event.set()
             return True
 
-    def emergency_stop(self) -> bool:
+    def emergency_stop(self, reason: str = "manual") -> bool:
         """Immediately make the actuator safe and stop the active cycle."""
         with self._lock:
             if self.state != IrrigationState.WATERING:
                 self.valve.close()
                 return False
+            if not self._stop_event.is_set():
+                self._stop_reason = reason
             self._stop_event.set()
             self.valve.close()
             return True
@@ -129,12 +133,12 @@ class IrrigationController:
         stopped_by = "duration"
         while self.flow_meter.duration_seconds < request.duration_seconds:
             if self._stop_event.is_set():
-                stopped_by = "manual"
+                stopped_by = self._stop_reason
                 break
             step = min(self.telemetry_interval, request.duration_seconds - self.flow_meter.duration_seconds)
             self.sleep_func(step)
             if self._stop_event.is_set():
-                stopped_by = "manual"
+                stopped_by = self._stop_reason
                 break
             reading = self.flow_meter.advance(step)
             telemetry = self._build_telemetry(request.operator_id, reading, IrrigationState.WATERING.value)

@@ -106,12 +106,15 @@ class WateringStationEngine:
                 continue
             except protocol.ConnectionClosedError:
                 LOGGER.error("Monitor disconnected")
+                self.irrigation.emergency_stop(reason="monitor_disconnected")
                 return
             except protocol.ProtocolError as exc:
                 LOGGER.error("Invalid protocol message from Monitor: %s", exc)
+                self.irrigation.emergency_stop(reason="monitor_disconnected")
                 return
             except OSError as exc:
                 LOGGER.error("Monitor connection error: %s", exc)
+                self.irrigation.emergency_stop(reason="monitor_disconnected")
                 return
 
     def handle_monitor_message(self, message: dict[str, object]) -> dict[str, object] | None:
@@ -175,6 +178,9 @@ class WateringStationEngine:
         return self.monitor_socket
 
     def _disconnect_monitor(self) -> None:
+        # Losing the Monitor removes the Engine's health/control path. Close the
+        # actuator immediately; the controller still emits its final reading.
+        self.irrigation.emergency_stop(reason="monitor_disconnected")
         if self.monitor_socket is not None:
             try:
                 self.monitor_socket.close()
