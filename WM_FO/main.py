@@ -76,9 +76,15 @@ def main(argv: list[str] | None = None) -> int:
         operator = FieldOperator(config.operator_id, publisher)
         worker = operator.worker(bootstrap)
         worker.start()
+        if not worker.wait_until_assigned(timeout=10.0):
+            raise KafkaUnavailable("Field Operator consumer was not assigned a partition")
         threading.Thread(target=_poll_worker, args=(worker,), name="wm-fo-kafka", daemon=True).start()
     except KafkaUnavailable as exc:
         LOGGER.error("Field Operator cannot start without Kafka: %s", exc)
+        if worker is not None:
+            worker.close()
+        if publisher is not None:
+            publisher.close()
         return 1
     try:
         if config.request_file:
