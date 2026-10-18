@@ -43,8 +43,8 @@ class SchemaTests(DatabaseTestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "legacy.db"
             legacy_schema = SCHEMA_PATH.read_text(encoding="utf-8").replace(
-                "'OPERATOR_INACTIVE', 'ENGINE_BLOCKED',\n                                                'ENGINE_FAILED'",
-                "'OPERATOR_INACTIVE'",
+                "'ENGINE_FAILED', 'MONITOR_UNAVAILABLE'",
+                "'ENGINE_FAILED'",
             )
             conn = sqlite3.connect(path)
             conn.execute("PRAGMA foreign_keys = ON")
@@ -52,6 +52,7 @@ class SchemaTests(DatabaseTestCase):
             conn.execute("INSERT INTO operators(operator_id, name, active) VALUES ('OP_001', 'One', 1)")
             conn.execute("INSERT INTO watering_stations(ws_id, location, registered_at) VALUES ('WS_001', 'North', '2026-10-15T10:00:00Z')")
             conn.execute("INSERT INTO irrigations(request_id, ws_id, operator_id, status, requested_duration_s, requested_at) VALUES ('legacy', 'WS_001', 'OP_001', 'AUTHORIZED', 3, '2026-10-15T10:00:00Z')")
+            conn.execute("INSERT INTO irrigations(request_id, ws_id, operator_id, status, deny_reason, requested_duration_s, requested_at) VALUES ('legacy-denied', 'WS_001', 'OP_001', 'DENIED', 'ENGINE_BLOCKED', 3, '2026-10-15T10:00:01Z')")
             conn.commit()
             conn.close()
 
@@ -59,7 +60,14 @@ class SchemaTests(DatabaseTestCase):
             try:
                 migrated.initialize()
                 self.assertEqual(migrated.get_irrigation("legacy").status, IrrigationStatus.AUTHORIZED)  # type: ignore[union-attr]
+                preserved_denial = migrated.get_irrigation("legacy-denied")
+                self.assertEqual(preserved_denial.status, IrrigationStatus.DENIED)  # type: ignore[union-attr]
+                self.assertEqual(preserved_denial.deny_reason, DenyReason.ENGINE_BLOCKED)  # type: ignore[union-attr]
                 self.assertTrue(migrated.reject_authorized_irrigation("legacy", DenyReason.ENGINE_FAILED))
+                migrated.add_operator("OP_002")
+                migrated.register_station("WS_002", "South")
+                migrated.record_irrigation_request("monitor-down", "WS_002", "OP_002", 3)
+                self.assertTrue(migrated.reject_authorized_irrigation("monitor-down", DenyReason.MONITOR_UNAVAILABLE))
             finally:
                 migrated.close()
 
@@ -216,6 +224,14 @@ class IrrigationTests(DatabaseTestCase):
         self.assertEqual(self.db.recover_open_irrigations(), 1)
         record = self.db.get_irrigation("r1")
         self.assertEqual(record.end_reason, EndReason.CENTRAL_RESTART)
+
+    def test_startup_recovery_preserves_watering_for_replayed_engine_events(self) -> None:
+        self.request("r1")
+        self.db.mark_irrigation_started("r1", "2026-10-05T10:00:01Z")
+        self.assertEqual(self.db.recover_open_irrigations(), 0)
+        record = self.db.get_irrigation("r1")
+        self.assertEqual(record.status, IrrigationStatus.WATERING)
+        self.assertEqual(self.db.get_live_irrigation("WS_001").request_id, "r1")  # type: ignore[union-attr]
 
     def test_unknown_operator_violates_foreign_key(self) -> None:
         with self.assertRaises(sqlite3.IntegrityError):

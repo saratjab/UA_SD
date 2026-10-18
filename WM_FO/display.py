@@ -26,7 +26,8 @@ def show_event(message: dict[str, Any]) -> None:
               f"{payload.get('accumulated_volume_liters', '?')} L accumulated, "
               f"{payload.get('flow_rate_lpm', '?')} L/min.")
     elif event_type == "IRRIGATION_COMPLETED":
-        _print(f"{prefix} Irrigation completed: {payload.get('duration_seconds', '?')} s, "
+        _print(f"{prefix} Irrigation completed for request {request_id}: "
+              f"{payload.get('duration_seconds', '?')} s, "
               f"{payload.get('accumulated_volume_liters', '?')} L, "
               f"reason {payload.get('end_reason', 'unknown')}.")
     elif event_type == "COMMAND_REJECTED":

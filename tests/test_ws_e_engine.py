@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 from common import protocol
-from WM_WS.WM_WS_E.config import EngineConfig
+from WM_WS.WM_WS_E.config import EngineConfig, parse_args
 from WM_WS.WM_WS_E.engine import WateringStationEngine
 from WM_WS.WM_WS_E.flow_meter import FlowMeter
 from WM_WS.WM_WS_E.irrigation import IrrigationController, IrrigationRequest, IrrigationState
@@ -29,6 +29,14 @@ def engine_config() -> EngineConfig:
 
 
 class EngineTests(unittest.TestCase):
+    def test_reconnect_backoff_is_configurable_from_cli(self) -> None:
+        config = parse_args([
+            "--kafka-host", "127.0.0.1", "--kafka-port", "9092",
+            "--monitor-host", "127.0.0.1", "--monitor-port", "6000",
+            "--reconnect-initial-delay", "0.2", "--reconnect-max-delay", "2.5",
+        ])
+        self.assertEqual((config.reconnect_initial_delay, config.reconnect_max_delay), (0.2, 2.5))
+
     def test_engine_starts_with_valid_configuration(self) -> None:
         engine = WateringStationEngine(engine_config())
         self.assertEqual(engine.config.ws_id, "WS_001")
@@ -59,6 +67,7 @@ class EngineTests(unittest.TestCase):
         thread.start()
         try:
             self.assertTrue(engine.send_hello(engine_sock))
+            self.assertTrue(engine.monitor_available)
         finally:
             thread.join(timeout=2)
             engine_sock.close()
@@ -105,6 +114,7 @@ class EngineTests(unittest.TestCase):
         valve = SolenoidValve()
         controller = IrrigationController("WS_001", valve, FlowMeter(12.0), telemetry_interval=0.05)
         engine = WateringStationEngine(engine_config(), irrigation_controller=controller)
+        engine._monitor_ready.set()
         self.assertTrue(engine.request_irrigation("operator-1", duration_seconds=1.0))
         engine.simulate_failure()
         self.assertFalse(valve.is_open)
@@ -116,6 +126,7 @@ class EngineTests(unittest.TestCase):
         valve = SolenoidValve()
         controller = IrrigationController("WS_001", valve, FlowMeter(12.0), telemetry_interval=0.05)
         engine = WateringStationEngine(engine_config(), irrigation_controller=controller)
+        engine._monitor_ready.set()
         self.assertTrue(engine.request_irrigation("operator-1", duration_seconds=1.0))
 
         engine.close()
@@ -128,6 +139,7 @@ class EngineTests(unittest.TestCase):
         valve = SolenoidValve()
         controller = IrrigationController("WS_001", valve, FlowMeter(12.0), telemetry_interval=0.05)
         engine = WateringStationEngine(engine_config(), irrigation_controller=controller)
+        engine._monitor_ready.set()
         self.assertTrue(engine.request_irrigation("operator-1", duration_seconds=0.2))
         try:
             response = engine.handle_monitor_message({"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 6})
@@ -145,6 +157,7 @@ class EngineTests(unittest.TestCase):
             result_callback=lambda result, reason: results.append((result, reason)),
         )
         engine = WateringStationEngine(engine_config(), irrigation_controller=controller)
+        engine._monitor_ready.set()
         engine.monitor_socket = engine_sock
         self.assertTrue(engine.request_irrigation("operator-1", duration_seconds=30.0))
         self.assertTrue(valve.is_open)
@@ -159,7 +172,73 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(results[0][1], "monitor_disconnected")
         self.assertGreater(results[0][0].duration_seconds, 0)
         self.assertGreater(results[0][0].accumulated_volume_liters, 0)
+        self.assertFalse(engine.monitor_available)
+        self.assertFalse(engine.request_irrigation("operator-1", duration_seconds=1.0))
         engine.close()
+
+    def test_irrigation_is_rejected_before_monitor_session_is_ready(self) -> None:
+        valve = SolenoidValve()
+        engine = WateringStationEngine(
+            engine_config(),
+            IrrigationController("WS_001", valve, FlowMeter(12.0), telemetry_interval=0.01),
+        )
+        self.assertFalse(engine.request_irrigation("operator-1", duration_seconds=1.0))
+        self.assertFalse(valve.is_open)
+
+    def test_monitor_reconnect_retries_use_bounded_exponential_backoff(self) -> None:
+        config = EngineConfig(**{
+            **engine_config().__dict__,
+            "reconnect_initial_delay": 0.25,
+            "reconnect_max_delay": 1.0,
+        })
+        engine = WateringStationEngine(config)
+        retry_delays: list[float] = []
+
+        def wait_and_stop(delay: float) -> bool:
+            retry_delays.append(delay)
+            if len(retry_delays) == 4:
+                engine._stop_event.set()
+            return engine._stop_event.is_set()
+
+        with mock.patch.object(engine, "connect_to_monitor", side_effect=OSError("Monitor unavailable")), \
+             mock.patch.object(engine._stop_event, "wait", side_effect=wait_and_stop):
+            self.assertEqual(engine.run(), 0)
+
+        self.assertEqual(retry_delays, [0.25, 0.5, 1.0, 1.0])
+
+    def test_reconnect_delay_resets_after_successful_monitor_handshake(self) -> None:
+        config = EngineConfig(**{
+            **engine_config().__dict__,
+            "reconnect_initial_delay": 0.25,
+            "reconnect_max_delay": 1.0,
+        })
+        engine = WateringStationEngine(config)
+        attempts = 0
+        retry_delays: list[float] = []
+
+        def connect() -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts in (1, 3):
+                raise OSError("Monitor unavailable")
+            engine.monitor_socket = None
+
+        def handle_session() -> None:
+            return None
+
+        def wait_then_stop(delay: float) -> bool:
+            retry_delays.append(delay)
+            if len(retry_delays) == 2:
+                engine._stop_event.set()
+            return engine._stop_event.is_set()
+
+        with mock.patch.object(engine, "connect_to_monitor", side_effect=connect), \
+             mock.patch.object(engine, "send_hello", return_value=True), \
+             mock.patch.object(engine, "handle_monitor_messages", side_effect=handle_session), \
+             mock.patch.object(engine._stop_event, "wait", side_effect=wait_then_stop):
+            self.assertEqual(engine.run(), 0)
+
+        self.assertEqual(retry_delays, [0.25, 0.25])
 
     def test_invalid_monitor_message_is_rejected(self) -> None:
         engine = WateringStationEngine(engine_config())

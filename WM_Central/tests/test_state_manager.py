@@ -194,7 +194,7 @@ class StateManagerTests(DatabaseTestCase):
         restarted.register("WS_001", None, object())
         restarted.register("WS_002", None, object())
         statuses = {view.ws_id: view.status for view in restarted.snapshot()}
-        self.assertEqual(statuses, {"WS_001": A.OUT_OF_SERVICE, "WS_002": A.AVAILABLE})
+        self.assertEqual(statuses, {"WS_001": A.OUT_OF_SERVICE, "WS_002": A.WATERING})
 
     def start_irrigation_on_ws2(self) -> None:
         self.db.record_irrigation_request("r-ws2", "WS_002", "OP_002", 60)

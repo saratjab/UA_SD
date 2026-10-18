@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS irrigations (
                          CHECK (deny_reason IN ('WS_DISCONNECTED', 'WS_LEAK',
                                                 'WS_OUT_OF_SERVICE', 'WS_BUSY',
                                                 'OPERATOR_INACTIVE', 'ENGINE_BLOCKED',
-                                                'ENGINE_FAILED')),
+                                                'ENGINE_FAILED', 'MONITOR_UNAVAILABLE')),
     requested_duration_s INTEGER CHECK (requested_duration_s IS NULL OR requested_duration_s > 0),
     requested_at         TEXT NOT NULL,
     started_at           TEXT,
@@ -101,4 +101,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_irrigations_one_live_per_ws
 -- Startup recovery (run by Central on every start, before accepting traffic):
 --   UPDATE irrigations
 --      SET status = 'ENDED', end_reason = 'CENTRAL_RESTART', ended_at = :now
---    WHERE status IN ('AUTHORIZED', 'WATERING');
+--    WHERE status = 'AUTHORIZED';
+-- WATERING rows remain live so retained Engine events can complete them after
+-- Central restarts during an irrigation.

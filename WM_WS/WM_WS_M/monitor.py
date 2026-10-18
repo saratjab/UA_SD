@@ -92,9 +92,8 @@ class WateringStationMonitor:
             time.sleep(self.config.health_interval)
 
     def perform_health_check(self, engine_socket: socket.socket, sequence: int) -> bool:
-        # CENTRAL closes all Monitor sockets when it restarts.  The protocol
-        # has no unsolicited CENTRAL messages, so renew registration before
-        # each health cycle to detect that closure and reconnect promptly.
+        # Keep the persistent Central session checked without re-registering on
+        # every Engine health cycle. Central sends no unsolicited messages.
         self._ensure_central_registration()
         self._last_health_connection_usable = False
         message = protocol.health_check_message(self.config.ws_id, sequence)
@@ -166,9 +165,9 @@ class WateringStationMonitor:
             return False
 
     def _ensure_central_registration(self) -> bool:
-        """Verify the Central socket and re-register after a restart."""
+        """Keep one registration per live Central session and reconnect if lost."""
         try:
-            return self.central_client.register()
+            return self.central_client.check_connection()
         except (OSError, protocol.ProtocolError, RuntimeError) as exc:
             LOGGER.warning("WM_Central connection lost; reconnecting: %s", exc)
 

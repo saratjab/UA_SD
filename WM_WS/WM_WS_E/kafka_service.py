@@ -25,7 +25,14 @@ class EngineKafkaService:
 
     def worker(self, bootstrap: str, consumer: Any | None = None) -> KafkaWorker:
         ws_id = self.engine.config.ws_id or "unassigned"
-        return KafkaWorker(bootstrap, f"wm-ws-engine-{ws_id}-v1", [WS_COMMANDS], self.handle_bytes, consumer)
+        return KafkaWorker(
+            bootstrap,
+            f"wm-ws-engine-{ws_id}-v1",
+            [WS_COMMANDS],
+            self.handle_bytes,
+            consumer,
+            group_instance_id=f"wm-ws-engine-{ws_id}-instance",
+        )
 
     def handle_bytes(self, raw: bytes) -> bool:
         try:
@@ -34,6 +41,10 @@ class EngineKafkaService:
             LOGGER.warning("Discarding malformed command: %s", exc); return True
 
     def handle_command(self, message: dict[str, Any]) -> None:
+        LOGGER.info(
+            "Engine command handler entered event=%s ws_id=%s request_id=%s",
+            message.get("event_type"), message.get("ws_id"), message.get("request_id"),
+        )
         if message.get("ws_id") != self.engine.config.ws_id: return
         event_type = message.get("event_type")
         if event_type == "START_IRRIGATION":
@@ -44,9 +55,14 @@ class EngineKafkaService:
             with self._lock:
                 if self._request_id == request_id: return  # replay after a successful start
                 if not self.engine.request_irrigation(operator_id, float(duration)):
-                    reason = "ENGINE_FAILED" if self.engine.failed else "ENGINE_BLOCKED"
+                    reason = (
+                        "ENGINE_FAILED" if self.engine.failed else
+                        "ENGINE_BLOCKED" if self.engine.blocked else
+                        "MONITOR_UNAVAILABLE"
+                    )
                     self._publish("COMMAND_REJECTED", request_id, operator_id, {"reason": reason}); return
                 self._request_id, self._operator_id, self._sequence, self._end_reason = request_id, operator_id, 0, "TIME_LIMIT"
+            LOGGER.info("Engine irrigation accepted ws_id=%s request_id=%s", self.engine.config.ws_id, request_id)
             self._publish("IRRIGATION_STARTED", request_id, operator_id, {})
         elif event_type in {"STOP_IRRIGATION", "BLOCK_WS"}:
             with self._lock:
@@ -79,7 +95,16 @@ class EngineKafkaService:
                 "MONITOR_DISCONNECTED" if stopped_by == "monitor_disconnected" else self._end_reason
             )
             self._request_id = None
+        LOGGER.info(
+            "Engine irrigation completed ws_id=%s request_id=%s duration_seconds=%.3f volume_liters=%.3f stopped_by=%s",
+            result.ws_id, request_id, result.duration_seconds,
+            result.accumulated_volume_liters, stopped_by,
+        )
         self._publish("IRRIGATION_COMPLETED", request_id, operator_id, {"end_reason": reason, "duration_seconds": result.duration_seconds, "accumulated_volume_liters": result.accumulated_volume_liters})
 
     def _publish(self, event_type: str, request_id: str, operator_id: str, payload: dict[str, Any]) -> None:
         self.publisher.publish(WS_EVENTS, envelope(event_type, payload, ws_id=self.engine.config.ws_id, request_id=request_id, operator_id=operator_id))
+        LOGGER.info(
+            "Engine event published event=%s ws_id=%s request_id=%s",
+            event_type, self.engine.config.ws_id, request_id,
+        )

@@ -6,7 +6,7 @@ from uuid import uuid4
 from dataclasses import dataclass
 from typing import Any
 
-from common.kafka_contract import (ACTIVATION_REQUESTS, OPERATOR_EVENTS, WS_COMMANDS, WS_EVENTS,
+from common.kafka_contract import (ACTIVATION_REQUESTS, COMMAND_REJECTION_REASONS, OPERATOR_EVENTS, WS_COMMANDS, WS_EVENTS,
                                    MessageValidationError, decode, envelope)
 from common.kafka_transport import KafkaPublisher, KafkaWorker
 
@@ -131,8 +131,9 @@ class CentralKafkaService:
                 self.state.update_telemetry(ws_id, latest.flow_rate_lpm if latest and latest.request_id == request_id else 0.0, volume)
         elif event_type == "COMMAND_REJECTED":
             reason = {"ENGINE_BLOCKED": DenyReason.ENGINE_BLOCKED,
-                      "ENGINE_FAILED": DenyReason.ENGINE_FAILED}.get(payload.get("reason"))
-            if reason is None:
+                      "ENGINE_FAILED": DenyReason.ENGINE_FAILED,
+                      "MONITOR_UNAVAILABLE": DenyReason.MONITOR_UNAVAILABLE}.get(payload.get("reason"))
+            if payload.get("reason") not in COMMAND_REJECTION_REASONS or reason is None:
                 raise MessageValidationError("invalid command rejection reason")
             if self.db.reject_authorized_irrigation(request_id, reason):
                 self._notify(record.operator_id, request_id, ws_id, "COMMAND_REJECTED", payload)

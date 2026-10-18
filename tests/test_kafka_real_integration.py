@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
+import socket
 import tempfile
+import threading
 import time
 import unittest
 from uuid import uuid4
@@ -16,6 +18,7 @@ from WM_Central.state_manager import StateManager
 from WM_WS.WM_WS_E.config import EngineConfig
 from WM_WS.WM_WS_E.engine import WateringStationEngine
 from WM_WS.WM_WS_E.kafka_service import EngineKafkaService
+from WM_WS.WM_WS_M.ws_e_server import EngineServer
 
 
 @unittest.skipUnless(os.environ.get("RUN_KAFKA_INTEGRATION") == "1", "set RUN_KAFKA_INTEGRATION=1 with docker-compose.kafka.yml running")
@@ -30,9 +33,29 @@ class RealKafkaLifecycleTests(unittest.TestCase):
             state = StateManager(db); state.register(ws_id, "test", object())
             central_publisher, engine_publisher = KafkaPublisher(bootstrap), KafkaPublisher(bootstrap)
             central = CentralKafkaService(db, state, central_publisher)
-            config = EngineConfig(ws_id, "localhost", 9092, "localhost", 1, 6, 1, .1, .05)
+            monitor_server = EngineServer("127.0.0.1", 0, ws_id, hello_timeout=2)
+            monitor_server.start()
+            monitor_port = monitor_server.server_sock.getsockname()[1]  # type: ignore[union-attr]
+            config = EngineConfig(ws_id, "127.0.0.1", 9092, "127.0.0.1", monitor_port, 6, 1, .1, .05)
             engine = WateringStationEngine(config)
             engine_service = EngineKafkaService(engine, engine_publisher)
+            accepted_sockets: list[socket.socket] = []
+            accept_errors: list[BaseException] = []
+
+            def accept_monitor_session() -> None:
+                try:
+                    accepted_sockets.append(monitor_server.accept_engine())
+                except BaseException as exc:
+                    accept_errors.append(exc)
+
+            engine.connect_to_monitor()
+            monitor_thread = threading.Thread(target=accept_monitor_session, daemon=True)
+            monitor_thread.start()
+            self.assertTrue(engine.send_hello(), "Engine did not complete the Monitor HELLO_ACK handshake")
+            monitor_thread.join(timeout=3)
+            self.assertFalse(monitor_thread.is_alive(), "Monitor did not finish accepting the Engine session")
+            self.assertFalse(accept_errors, f"Monitor failed to accept the Engine session: {accept_errors!r}")
+            self.assertTrue(engine.monitor_available)
             activation_worker = KafkaWorker(
                 bootstrap, f"wm-test-activation-{suffix}", [ACTIVATION_REQUESTS],
                 central.handle_activation_bytes, auto_offset_reset="latest",
@@ -83,6 +106,12 @@ class RealKafkaLifecycleTests(unittest.TestCase):
                 request_publisher.close()
                 for worker in workers:
                     worker.close()
+                engine.close()
+                for conn in accepted_sockets:
+                    conn.close()
+                monitor_server.close()
+                if monitor_thread.is_alive():
+                    monitor_thread.join(timeout=3)
                 central_publisher.close()
                 engine_publisher.close()
                 db.close()

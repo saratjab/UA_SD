@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import select
 import socket
 from types import TracebackType
 from typing import Any
@@ -58,6 +59,23 @@ class CentralClient:
 
         LOGGER.error("Unexpected registration response from WM_Central: %s", response)
         return False
+
+    def check_connection(self) -> bool:
+        """Check the persistent Central session without sending a protocol frame.
+
+        Central is request/response only, so a zero-time readiness check followed
+        by MSG_PEEK detects a closed peer without consuming any application data.
+        """
+        sock = self._require_socket()
+        try:
+            readable, _, exceptional = select.select([sock], [], [sock], 0)
+            if exceptional:
+                raise protocol.ConnectionClosedError("WM_Central socket failed")
+            if readable and sock.recv(1, socket.MSG_PEEK) == b"":
+                raise protocol.ConnectionClosedError("WM_Central closed the Monitor session")
+        except (OSError, ValueError) as exc:
+            raise protocol.ConnectionClosedError(f"WM_Central socket is unavailable: {exc}") from exc
+        return True
 
     def report_fault(self, fault: str, details: str, timestamp: str) -> bool:
         sock = self._require_socket()

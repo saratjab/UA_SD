@@ -11,6 +11,14 @@ WS_COMMANDS = "wm.ws.commands"
 WS_EVENTS = "wm.ws.events"
 OPERATOR_EVENTS = "wm.operator.events"
 
+# Reasons an Engine may include in COMMAND_REJECTED. Keep Engine output,
+# Central validation, and persisted denial values aligned.
+COMMAND_REJECTION_REASONS = frozenset({
+    "ENGINE_BLOCKED",
+    "ENGINE_FAILED",
+    "MONITOR_UNAVAILABLE",
+})
+
 REQUIRED = ("event_type", "message_id", "timestamp", "payload")
 
 
