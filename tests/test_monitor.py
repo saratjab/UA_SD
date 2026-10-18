@@ -14,14 +14,24 @@ class FakeCentralClient:
     def __init__(self) -> None:
         self.faults: list[tuple[str, str, str]] = []
         self.resolutions: list[str] = []
+        self.connected = False
+        self.connect_calls = 0
+        self.register_calls = 0
 
     def connect(self) -> None:
-        pass
+        self.connected = True
+        self.connect_calls += 1
 
     def close(self) -> None:
-        pass
+        self.connected = False
+
+    def check_connection(self) -> bool:
+        if not self.connected:
+            raise RuntimeError("Central client is not connected")
+        return True
 
     def register(self) -> bool:
+        self.register_calls += 1
         return True
 
     def report_fault(self, fault: str, details: str, timestamp: str) -> bool:
@@ -153,9 +163,22 @@ class MonitorTests(unittest.TestCase):
             self.assertFalse(responder.is_alive())
             self.assertEqual(received_sequences, [1, 2])
             self.assertEqual(sleeps, [1.0, 1.0])
+            self.assertEqual(self.central.register_calls, 1)
+            self.assertEqual(self.central.connect_calls, 1)
         finally:
             monitor_sock.close()
             engine_sock.close()
+
+    def test_central_disconnect_causes_one_new_registration(self) -> None:
+        self.assertTrue(self.monitor._ensure_central_registration())
+        self.assertEqual(self.central.register_calls, 1)
+
+        # Simulate Central closing the persistent session.
+        self.central.connected = False
+        self.assertTrue(self.monitor._ensure_central_registration())
+
+        self.assertEqual(self.central.connect_calls, 2)
+        self.assertEqual(self.central.register_calls, 2)
 
     def _answer_one_health_check_in_thread(
         self,

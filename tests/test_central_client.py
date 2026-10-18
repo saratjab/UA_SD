@@ -9,6 +9,29 @@ from WM_WS.WM_WS_M.central_client import CentralClient
 
 
 class CentralClientTests(unittest.TestCase):
+    def test_check_connection_keeps_live_session_without_consuming_data(self) -> None:
+        server_sock, client_sock = socket.socketpair()
+        client = CentralClient("unused", 0, "WS_001")
+        client.sock = client_sock
+        try:
+            protocol.send_message(server_sock, {"type": "REGISTER_ACK", "ws_id": "WS_001", "status": "OK"})
+            self.assertTrue(client.check_connection())
+            self.assertEqual(protocol.receive_message(client_sock)["type"], "REGISTER_ACK")
+        finally:
+            client.close()
+            server_sock.close()
+
+    def test_check_connection_detects_closed_session(self) -> None:
+        server_sock, client_sock = socket.socketpair()
+        client = CentralClient("unused", 0, "WS_001")
+        client.sock = client_sock
+        server_sock.close()
+        try:
+            with self.assertRaises(protocol.ConnectionClosedError):
+                client.check_connection()
+        finally:
+            client.close()
+
     def test_register_ack(self) -> None:
         result, received = self._run_registration({"type": "REGISTER_ACK", "ws_id": "WS_001", "status": "OK"})
         self.assertTrue(result)
