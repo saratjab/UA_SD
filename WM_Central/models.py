@@ -120,3 +120,5 @@ class StationView:
     admin_state: AdminState
     operator_id: str | None  # only while WATERING
     fault: str | None        # description of the open fault, if any
+    flow_rate_lpm: float | None = None
+    accumulated_volume_liters: float | None = None

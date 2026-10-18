@@ -89,6 +89,7 @@ class StateManager:
         # ws_id -> the connection object that currently represents the station.
         # Opaque to this class; the socket layer decides what it is.
         self._connections: dict[str, Any] = {}
+        self._telemetry: dict[str, tuple[float, float]] = {}
 
     # ------------------------------------------------------------------
     # Connectivity (Monitor <-> Central socket)
@@ -132,6 +133,12 @@ class StateManager:
     def connected_ws_ids(self) -> set[str]:
         with self._lock:
             return set(self._connections)
+
+    def operators(self):
+        return self._db.list_operators()
+
+    def irrigation(self, request_id: str):
+        return self._db.get_irrigation(request_id)
 
     # ------------------------------------------------------------------
     # Faults
@@ -181,6 +188,8 @@ class StateManager:
 
     def activate_station(self, ws_id: str) -> CommandOutcome:
         with self._lock:
+            if ws_id not in self._connections or self._db.get_open_fault(ws_id) is not None:
+                return CommandOutcome(False)
             ok = self._db.set_admin_state(ws_id, AdminState.ACTIVE)
         if ok:
             LOGGER.info("WS %s ACTIVATED", ws_id)
@@ -227,6 +236,12 @@ class StateManager:
                         else None
                     ),
                     fault=f"{fault.fault_type}: {fault.details}" if fault else None,
+                    flow_rate_lpm=self._telemetry.get(station.ws_id, (None, None))[0],
+                    accumulated_volume_liters=self._telemetry.get(station.ws_id, (None, None))[1],
                 )
             )
         return views
+
+    def update_telemetry(self, ws_id: str, flow_rate_lpm: float, accumulated_volume_liters: float) -> None:
+        with self._lock:
+            self._telemetry[ws_id] = (flow_rate_lpm, accumulated_volume_liters)

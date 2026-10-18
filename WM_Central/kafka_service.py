@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from uuid import uuid4
 from dataclasses import dataclass
 from typing import Any
 
@@ -119,11 +120,15 @@ class CentralKafkaService:
             if reason is None: raise MessageValidationError("invalid completion end_reason")
             duration, volume = self._number(payload, "duration_seconds"), self._number(payload, "accumulated_volume_liters")
             if self.db.end_irrigation(request_id, reason, duration_s=duration, total_volume_l=volume, ended_at=message["timestamp"]):
+                latest = self.latest_telemetry.get(ws_id)
+                self.state.update_telemetry(ws_id, latest.flow_rate_lpm if latest and latest.request_id == request_id else 0.0, volume)
                 self._notify(record.operator_id, request_id, ws_id, "IRRIGATION_COMPLETED", payload)
             else:
                 self.db.add_terminal_measurements(
                     request_id, duration_s=duration, total_volume_l=volume, ended_at=message["timestamp"]
                 )
+                latest = self.latest_telemetry.get(ws_id)
+                self.state.update_telemetry(ws_id, latest.flow_rate_lpm if latest and latest.request_id == request_id else 0.0, volume)
         elif event_type == "COMMAND_REJECTED":
             reason = {"ENGINE_BLOCKED": DenyReason.ENGINE_BLOCKED,
                       "ENGINE_FAILED": DenyReason.ENGINE_FAILED}.get(payload.get("reason"))
@@ -140,19 +145,28 @@ class CentralKafkaService:
         old = self.latest_telemetry.get(record.ws_id)
         if record.status is IrrigationStatus.WATERING and (old is None or old.request_id != values.request_id or seq > old.sequence):
             self.latest_telemetry[record.ws_id] = values
+            self.state.update_telemetry(record.ws_id, values.flow_rate_lpm, values.accumulated_volume_liters)
             self._notify(record.operator_id, record.request_id, record.ws_id, "IRRIGATION_PROGRESS", p)
+
+    def start_irrigation(self, ws_id: str, duration_seconds: int, operator_id: str) -> str:
+        """Submit a CENTRAL request through the same validation and contract as FO."""
+        request_id = str(uuid4())
+        message = envelope("ACTIVATION_REQUEST", {"duration_seconds": duration_seconds},
+                           ws_id=ws_id, operator_id=operator_id, request_id=request_id)
+        self.handle_activation(message)
+        return request_id
 
     def issue_station_command(self, event_type: str, ws_id: str, *, request_id: str | None = None) -> bool:
         if event_type not in {"START_IRRIGATION", "BLOCK_WS", "ACTIVATE_WS", "STOP_IRRIGATION"}: raise ValueError("unsupported command")
         if self.db.get_station(ws_id) is None: return False
         if event_type == "BLOCK_WS": self.state.block_station(ws_id)
         elif event_type == "ACTIVATE_WS":
-            if self.state.status_of(ws_id) in {StationStatus.DISCONNECTED, StationStatus.LEAK}: return False
-            self.state.activate_station(ws_id)
+            if not self.state.activate_station(ws_id).ok: return False
         self.publisher.publish(WS_COMMANDS, envelope(event_type, {}, ws_id=ws_id, request_id=request_id))
         return True
 
     def _notify(self, operator_id: str | None, request_id: str, ws_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        LOGGER.info("%s ws=%s request=%s payload=%s", event_type, ws_id, request_id, payload)
         if operator_id:
             self.publisher.publish(
                 OPERATOR_EVENTS,

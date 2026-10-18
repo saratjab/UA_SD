@@ -16,7 +16,7 @@ import threading
 
 from .config import parse_args
 from .database import Database
-from .monitoring import log_station_table
+from .monitoring import control_loop, log_station_table, monitor_loop
 from .socket_server import CentralSocketServer
 from .state_manager import StateManager
 from .kafka_service import CentralKafkaService
@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
 
     kafka_threads: list[threading.Thread] = []
     workers = []
+    kafka = None
+    stop = threading.Event()
     try:
         publisher = KafkaPublisher(f"{config.kafka_host}:{config.kafka_port}")
         kafka = CentralKafkaService(db, state, publisher)
@@ -61,10 +63,13 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error("Kafka integration disabled: %s", exc)
     server = CentralSocketServer(config.socket_host, config.socket_port, state)
     server.start()
-
-    stop = threading.Event()
+    threading.Thread(target=monitor_loop, args=(state, stop), name="central-monitor", daemon=True).start()
+    if kafka is not None:
+        threading.Thread(target=control_loop, args=(state, kafka, stop), name="central-control", daemon=True).start()
+    else:
+        LOGGER.warning("CENTRAL control interface unavailable because Kafka is not connected")
     try:
-        while not stop.wait(1.0):  # 1 s ticks keep Ctrl+C responsive on every OS
+        while not stop.wait(1.0):
             pass
     except KeyboardInterrupt:
         LOGGER.info("Shutting down")

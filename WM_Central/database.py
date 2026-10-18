@@ -453,6 +453,10 @@ class Database:
         row = self._one("SELECT * FROM irrigations WHERE request_id = ?", (request_id,))
         return _irrigation(row) if row else None
 
+    def list_irrigations(self) -> list[IrrigationRecord]:
+        """Return request history in creation order for CENTRAL audit/display."""
+        return [_irrigation(row) for row in self._all("SELECT * FROM irrigations ORDER BY irrigation_id")]
+
     def get_live_irrigation(self, ws_id: str) -> IrrigationRecord | None:
         row = self._one(
             f"SELECT * FROM irrigations WHERE ws_id = ? AND status IN {_LIVE_SQL}", (ws_id,)
