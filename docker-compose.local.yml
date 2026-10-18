@@ -1,0 +1,217 @@
+name: watermanagement-local
+
+x-app-defaults: &app-defaults
+  image: watermanagement-app:local
+  init: true
+  restart: unless-stopped
+  networks:
+    - watermanagement
+
+services:
+  kafka:
+    image: apache/kafka:3.8.0
+    hostname: kafka
+    restart: unless-stopped
+    ports:
+      - "${KAFKA_PUBLISHED_PORT:-9092}:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:29092,HOST://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,HOST://localhost:${KAFKA_PUBLISHED_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - watermanagement
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  kafka-init:
+    image: apache/kafka:3.8.0
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - >-
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic wm.activation.requests --partitions 1 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic wm.ws.commands --partitions 1 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic wm.ws.events --partitions 1 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic wm.operator.events --partitions 1 --replication-factor 1
+    restart: "no"
+    networks:
+      - watermanagement
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  central:
+    <<: *app-defaults
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wm-central
+    command:
+      - python
+      - -m
+      - WM_Central.main
+      - --socket-host
+      - 0.0.0.0
+      - --socket-port
+      - "${CENTRAL_SOCKET_PORT:-5000}"
+      - --kafka-host
+      - kafka
+      - --kafka-port
+      - "29092"
+      - --db-path
+      - "${DB_PATH:-/data/wm_central.db}"
+      - --seed-dev
+    environment:
+      CENTRAL_SOCKET_PORT: "${CENTRAL_SOCKET_PORT:-5000}"
+    ports:
+      - "${CENTRAL_PUBLISHED_PORT:-5000}:${CENTRAL_SOCKET_PORT:-5000}"
+    volumes:
+      - central-data:/data
+    stdin_open: true
+    tty: true
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,socket; s=socket.create_connection(('127.0.0.1', int(os.environ['CENTRAL_SOCKET_PORT'])), timeout=2); s.close()"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  ws1-monitor:
+    <<: *app-defaults
+    command:
+      - python
+      - -m
+      - WM_WS.WM_WS_M.main
+      - --ws-id
+      - "${WS1_ID:-WS_001}"
+      - --location
+      - "${WS1_LOCATION:-North Garden}"
+      - --central-host
+      - central
+      - --central-port
+      - "${CENTRAL_SOCKET_PORT:-5000}"
+      - --engine-host
+      - 0.0.0.0
+      - --engine-port
+      - "${WS1_ENGINE_PORT:-6001}"
+      - --health-interval
+      - "${MONITOR_HEALTH_INTERVAL:-1.0}"
+    depends_on:
+      central:
+        condition: service_healthy
+
+  ws1-engine:
+    <<: *app-defaults
+    command:
+      - python
+      - -m
+      - WM_WS.WM_WS_E.main
+      - --ws-id
+      - "${WS1_ID:-WS_001}"
+      - --kafka-host
+      - kafka
+      - --kafka-port
+      - "29092"
+      - --monitor-host
+      - ws1-monitor
+      - --monitor-port
+      - "${WS1_ENGINE_PORT:-6001}"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      ws1-monitor:
+        condition: service_started
+
+  ws2-monitor:
+    <<: *app-defaults
+    command:
+      - python
+      - -m
+      - WM_WS.WM_WS_M.main
+      - --ws-id
+      - "${WS2_ID:-WS_002}"
+      - --location
+      - "${WS2_LOCATION:-South Garden}"
+      - --central-host
+      - central
+      - --central-port
+      - "${CENTRAL_SOCKET_PORT:-5000}"
+      - --engine-host
+      - 0.0.0.0
+      - --engine-port
+      - "${WS2_ENGINE_PORT:-6002}"
+      - --health-interval
+      - "${MONITOR_HEALTH_INTERVAL:-1.0}"
+    depends_on:
+      central:
+        condition: service_healthy
+
+  ws2-engine:
+    <<: *app-defaults
+    command:
+      - python
+      - -m
+      - WM_WS.WM_WS_E.main
+      - --ws-id
+      - "${WS2_ID:-WS_002}"
+      - --kafka-host
+      - kafka
+      - --kafka-port
+      - "29092"
+      - --monitor-host
+      - ws2-monitor
+      - --monitor-port
+      - "${WS2_ENGINE_PORT:-6002}"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      ws2-monitor:
+        condition: service_started
+
+  fo:
+    <<: *app-defaults
+    profiles: [operator]
+    entrypoint: [python, -m, WM_FO.main]
+    command:
+      - --kafka-host
+      - kafka
+      - --kafka-port
+      - "29092"
+      - --operator-id
+      - "${FO_OPERATOR_ID:-OP_001}"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      central:
+        condition: service_healthy
+
+volumes:
+  central-data:
+  kafka-data:
+
+networks:
+  watermanagement:
+    name: watermanagement-local
+
