@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--health-interval",
         type=float,
-        default=5.0,
+        default=1.0,
         help="Seconds between health checks",
     )
     parser.add_argument(

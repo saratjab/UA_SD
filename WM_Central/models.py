@@ -40,6 +40,8 @@ class DenyReason(str, Enum):
     WS_OUT_OF_SERVICE = "WS_OUT_OF_SERVICE"
     WS_BUSY = "WS_BUSY"
     OPERATOR_INACTIVE = "OPERATOR_INACTIVE"
+    ENGINE_BLOCKED = "ENGINE_BLOCKED"
+    ENGINE_FAILED = "ENGINE_FAILED"
 
 
 class EndReason(str, Enum):
@@ -118,3 +120,5 @@ class StationView:
     admin_state: AdminState
     operator_id: str | None  # only while WATERING
     fault: str | None        # description of the open fault, if any
+    flow_rate_lpm: float | None = None
+    accumulated_volume_liters: float | None = None

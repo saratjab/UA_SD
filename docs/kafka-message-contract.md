@@ -27,7 +27,8 @@ FO publishes an `ACTIVATION_REQUEST` to `wm.activation.requests`:
 whole number. Central validates that operator and station exist, the operator is
 active, and that the connected station is AVAILABLE. A duplicate request gets an
 `ACTIVATION_STATUS`; it never starts a second irrigation. FO consumes
-`wm.operator.events` with an operator-specific group and filters `operator_id`.
+`wm.operator.events`, filters by `operator_id`, and correlates each event to a
+pending request.
 
 For `START_IRRIGATION`, the Engine receives the same IDs and a payload of
 `{"duration_seconds": N}`. Engine emits `IRRIGATION_STARTED` only after its
@@ -41,10 +42,26 @@ valve/controller starts. Each `IRRIGATION_TELEMETRY` payload is:
 the prior reading only for a newer sequence. Completion payloads contain
 `end_reason`, `duration_seconds`, and `accumulated_volume_liters`. Supported wire
 reasons: `TIME_LIMIT`, `MANUAL_STOP`, `CENTRAL_STOP`, `STATION_BLOCKED`,
-`LEAK_DETECTED`, `ENGINE_FAULT`.
+`LEAK_DETECTED`, `ENGINE_FAULT`, `MONITOR_DISCONNECTED`. The latter reports
+that the Engine safely stopped watering after losing its Monitor connection;
+Central records `DISCONNECTED` as the end reason. If Central's socket-side
+disconnect transition wins the race, the later completion contributes final
+measurements and the actual valve-stop timestamp while preserving Central's
+recorded end reason.
+
+Engine `COMMAND_REJECTED` uses reason `ENGINE_BLOCKED` or `ENGINE_FAILED`.
+Central records the irrigation as `DENIED` with that exact reason and forwards
+it to FO.
+`ACTIVATION_AUTHORIZED` means Central accepted the request; an Engine rejection
+can still follow if Engine state changed before command delivery.
 
 Central groups are `wm-central-activation-v1` and `wm-central-events-v1`; an
-Engine uses `wm-ws-engine-<ws_id>-v1`. Consumers disable auto commit and commit
+Engine uses `wm-ws-engine-<ws_id>-v1`. Each FO process uses a unique group ID
+and displays only events whose `request_id` is pending in that process. This
+broadcasts operator events to concurrent terminals while keeping each request
+with its submitter. FO waits for partition assignment before accepting requests
+and starts its process-specific group at the latest offset, avoiding replayed
+history without skipping events produced after the session starts. Consumers disable auto commit and commit
 only after successful handling. SQLite request uniqueness and terminal updates
 provide idempotency, but a process crash after a broker publish and before offset
 commit can produce a duplicate notification/command; consumers must remain

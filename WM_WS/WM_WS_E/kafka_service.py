@@ -44,11 +44,17 @@ class EngineKafkaService:
             with self._lock:
                 if self._request_id == request_id: return  # replay after a successful start
                 if not self.engine.request_irrigation(operator_id, float(duration)):
-                    self._publish("COMMAND_REJECTED", request_id, operator_id, {"reason": "ENGINE_UNAVAILABLE"}); return
+                    reason = "ENGINE_FAILED" if self.engine.failed else "ENGINE_BLOCKED"
+                    self._publish("COMMAND_REJECTED", request_id, operator_id, {"reason": reason}); return
                 self._request_id, self._operator_id, self._sequence, self._end_reason = request_id, operator_id, 0, "TIME_LIMIT"
             self._publish("IRRIGATION_STARTED", request_id, operator_id, {})
         elif event_type in {"STOP_IRRIGATION", "BLOCK_WS"}:
             with self._lock:
+                if event_type == "STOP_IRRIGATION":
+                    command_request_id = message.get("request_id")
+                    if not isinstance(command_request_id, str) or not command_request_id or command_request_id != self._request_id:
+                        LOGGER.info("Ignoring STOP_IRRIGATION for non-active request %r", command_request_id)
+                        return
                 request_id, operator_id = self._request_id, self._operator_id
                 self._end_reason = "STATION_BLOCKED" if event_type == "BLOCK_WS" else "CENTRAL_STOP"
             if event_type == "BLOCK_WS": self.engine.blocked = True
@@ -68,7 +74,10 @@ class EngineKafkaService:
     def on_result(self, result: IrrigationResult, stopped_by: str) -> None:
         with self._lock:
             if not self._request_id: return
-            request_id, operator_id, reason = self._request_id, self._operator_id, ("ENGINE_FAULT" if self.engine.failed else self._end_reason)
+            request_id, operator_id = self._request_id, self._operator_id
+            reason = "ENGINE_FAULT" if self.engine.failed else (
+                "MONITOR_DISCONNECTED" if stopped_by == "monitor_disconnected" else self._end_reason
+            )
             self._request_id = None
         self._publish("IRRIGATION_COMPLETED", request_id, operator_id, {"end_reason": reason, "duration_seconds": result.duration_seconds, "accumulated_volume_liters": result.accumulated_volume_liters})
 

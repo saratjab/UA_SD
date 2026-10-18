@@ -19,13 +19,17 @@ class FieldOperator:
     def __init__(self, operator_id: str, publisher: KafkaPublisher) -> None:
         self.operator_id = operator_id
         self.publisher = publisher
+        # Each process needs its own copy of operator events so it can route
+        # them by request_id to the terminal that submitted the request.
+        self._consumer_group_id = f"wm-field-operator-{operator_id}-v1-{uuid4()}"
         self._lock = threading.RLock()
         self._pending: dict[str, threading.Event] = {}
         self._results: dict[str, dict[str, Any]] = {}
 
     def worker(self, bootstrap: str, consumer: Any | None = None) -> KafkaWorker:
-        return KafkaWorker(bootstrap, f"wm-field-operator-{self.operator_id}-v1",
-                           [OPERATOR_EVENTS], self.handle_bytes, consumer)
+        return KafkaWorker(bootstrap, self._consumer_group_id,
+                           [OPERATOR_EVENTS], self.handle_bytes, consumer,
+                           auto_offset_reset="latest")
 
     def request_irrigation(self, ws_id: str, duration_seconds: int) -> str:
         request_id = str(uuid4())
@@ -39,7 +43,7 @@ class FieldOperator:
             with self._lock:
                 self._pending.pop(request_id, None)
             raise
-        print(f"[{ws_id}] Request {request_id} submitted for {duration_seconds} seconds.")
+        print(f"[{ws_id}] Request {request_id} submitted for {duration_seconds} seconds.", flush=True)
         return request_id
 
     def wait_for_result(self, request_id: str, timeout: float) -> bool:
@@ -52,7 +56,7 @@ class FieldOperator:
             self._pending.pop(request_id, None)
             self._results.pop(request_id, None)
         if not finished:
-            print(f"Request {request_id} is still in progress; no final result arrived within {timeout:g} seconds.")
+            print(f"Request {request_id} is still in progress; no final result arrived within {timeout:g} seconds.", flush=True)
         return finished
 
     def handle_bytes(self, raw: bytes) -> bool:
@@ -63,8 +67,14 @@ class FieldOperator:
             return True
         if message.get("operator_id") != self.operator_id:
             return True
-        show_event(message)
         request_id = message.get("request_id")
+        with self._lock:
+            waiter = self._pending.get(request_id) if isinstance(request_id, str) else None
+        # Operator events are broadcast to each process group. Only the process
+        # that owns the pending request displays and completes that interaction.
+        if waiter is None:
+            return True
+        show_event(message)
         if request_id and message["event_type"] in TERMINAL_EVENTS:
             with self._lock:
                 waiter = self._pending.get(request_id)

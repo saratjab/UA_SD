@@ -136,4 +136,4 @@ class WMWSIntegrationTests(unittest.TestCase):
                 "--central-port", "5000", "--engine-host", "127.0.0.1", "--engine-port", "6000",
             ]
         )
-        self.assertEqual((config.engine_hello_timeout, config.health_interval, config.health_timeout), (5.0, 5.0, 2.0))
+        self.assertEqual((config.engine_hello_timeout, config.health_interval, config.health_timeout), (5.0, 1.0, 2.0))

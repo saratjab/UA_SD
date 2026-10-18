@@ -50,3 +50,63 @@ class CentralKafkaTests(DatabaseTestCase):
     def test_malformed_payload_is_consumed_without_crashing_partition(self) -> None:
         self.assertTrue(self.service.handle_activation_bytes(b"not json"))
 
+    def test_monitor_disconnect_completion_records_disconnected_reason_and_measurements(self) -> None:
+        self.service.handle_activation(self.request())
+        self.service.handle_engine_event(envelope(
+            "IRRIGATION_COMPLETED",
+            {"end_reason": "MONITOR_DISCONNECTED", "duration_seconds": 2.0, "accumulated_volume_liters": 0.2},
+            ws_id="WS_001", request_id="request-1",
+        ))
+        record = self.db.get_irrigation("request-1")
+        self.assertEqual(record.end_reason.value, "DISCONNECTED")  # type: ignore[union-attr]
+        self.assertEqual((record.duration_s, record.total_volume_l), (2.0, 0.2))  # type: ignore[union-attr]
+
+    def test_fault_terminal_state_accepts_late_final_measurements_and_engine_end_time(self) -> None:
+        self.service.handle_activation(self.request())
+        self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {}, ws_id="WS_001", request_id="request-1"))
+        self.service.handle_engine_event(envelope(
+            "IRRIGATION_TELEMETRY", {"sequence": 1, "flow_rate_lpm": 6.0, "accumulated_volume_liters": 0.1, "duration_seconds": 1.0},
+            ws_id="WS_001", request_id="request-1",
+        ))
+        fault = self.state.report_fault("WS_001", self.connection, "monitor_disconnect")
+        self.assertEqual(fault.ended_request_id, "request-1")
+        completion = envelope("IRRIGATION_COMPLETED", {
+            "end_reason": "ENGINE_FAULT", "duration_seconds": 1.2, "accumulated_volume_liters": 0.12,
+        }, ws_id="WS_001", request_id="request-1")
+        completion["timestamp"] = "2026-10-15T12:00:00Z"
+        inferred_end = self.db.get_irrigation("request-1").ended_at  # type: ignore[union-attr]
+        self.service.handle_engine_event(completion)
+        self.service.handle_engine_event(completion)
+        record = self.db.get_irrigation("request-1")
+        self.assertEqual(record.end_reason.value, "LEAK")  # type: ignore[union-attr]
+        self.assertEqual(record.ended_at, completion["timestamp"])  # type: ignore[union-attr]
+        self.assertNotEqual(record.ended_at, inferred_end)  # type: ignore[union-attr]
+        self.assertEqual((record.duration_s, record.total_volume_l), (1.2, 0.12))  # type: ignore[union-attr]
+
+    def test_engine_crash_fault_without_completion_does_not_fabricate_measurements(self) -> None:
+        self.service.handle_activation(self.request())
+        self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {}, ws_id="WS_001", request_id="request-1"))
+        self.state.report_fault("WS_001", self.connection, "engine_crash")
+        record = self.db.get_irrigation("request-1")
+        self.assertEqual(record.end_reason.value, "LEAK")  # type: ignore[union-attr]
+        self.assertIsNone(record.duration_s)  # type: ignore[union-attr]
+        self.assertIsNone(record.total_volume_l)  # type: ignore[union-attr]
+
+    def test_engine_blocked_rejection_is_recorded_and_notified_with_same_reason(self) -> None:
+        self.service.handle_activation(self.request())
+        self.service.handle_engine_event(envelope("COMMAND_REJECTED", {"reason": "ENGINE_BLOCKED"},
+                                                  ws_id="WS_001", request_id="request-1"))
+        record = self.db.get_irrigation("request-1")
+        self.assertEqual(record.status, IrrigationStatus.DENIED)  # type: ignore[union-attr]
+        self.assertEqual(record.deny_reason.value, "ENGINE_BLOCKED")  # type: ignore[union-attr]
+        notifications = [m for topic, m in self.publisher.records if topic == "wm.operator.events" and m["event_type"] == "COMMAND_REJECTED"]
+        self.assertEqual(notifications[-1]["payload"]["reason"], record.deny_reason.value)  # type: ignore[union-attr]
+
+    def test_engine_failed_rejection_is_not_recorded_as_manual_stop(self) -> None:
+        self.service.handle_activation(self.request())
+        self.service.handle_engine_event(envelope("COMMAND_REJECTED", {"reason": "ENGINE_FAILED"},
+                                                  ws_id="WS_001", request_id="request-1"))
+        record = self.db.get_irrigation("request-1")
+        self.assertEqual(record.status, IrrigationStatus.DENIED)  # type: ignore[union-attr]
+        self.assertEqual(record.deny_reason.value, "ENGINE_FAILED")  # type: ignore[union-attr]
+

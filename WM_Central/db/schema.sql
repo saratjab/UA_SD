@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS irrigations (
     deny_reason          TEXT
                          CHECK (deny_reason IN ('WS_DISCONNECTED', 'WS_LEAK',
                                                 'WS_OUT_OF_SERVICE', 'WS_BUSY',
-                                                'OPERATOR_INACTIVE')),
+                                                'OPERATOR_INACTIVE', 'ENGINE_BLOCKED',
+                                                'ENGINE_FAILED')),
     requested_duration_s INTEGER CHECK (requested_duration_s IS NULL OR requested_duration_s > 0),
     requested_at         TEXT NOT NULL,
     started_at           TEXT,

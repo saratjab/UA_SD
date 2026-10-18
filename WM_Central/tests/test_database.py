@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 
 from WM_Central.models import (
     AdminState,
@@ -10,6 +12,7 @@ from WM_Central.models import (
     EndReason,
     IrrigationStatus,
 )
+from WM_Central.database import Database, SCHEMA_PATH
 
 from .helpers import DatabaseTestCase
 
@@ -35,6 +38,30 @@ class SchemaTests(DatabaseTestCase):
         self.db.close()
         with self.assertRaises(RuntimeError):
             self.db.list_stations()
+
+    def test_initialize_migrates_engine_denial_reasons_and_preserves_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.db"
+            legacy_schema = SCHEMA_PATH.read_text(encoding="utf-8").replace(
+                "'OPERATOR_INACTIVE', 'ENGINE_BLOCKED',\n                                                'ENGINE_FAILED'",
+                "'OPERATOR_INACTIVE'",
+            )
+            conn = sqlite3.connect(path)
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.executescript(legacy_schema)
+            conn.execute("INSERT INTO operators(operator_id, name, active) VALUES ('OP_001', 'One', 1)")
+            conn.execute("INSERT INTO watering_stations(ws_id, location, registered_at) VALUES ('WS_001', 'North', '2026-10-15T10:00:00Z')")
+            conn.execute("INSERT INTO irrigations(request_id, ws_id, operator_id, status, requested_duration_s, requested_at) VALUES ('legacy', 'WS_001', 'OP_001', 'AUTHORIZED', 3, '2026-10-15T10:00:00Z')")
+            conn.commit()
+            conn.close()
+
+            migrated = Database(path)
+            try:
+                migrated.initialize()
+                self.assertEqual(migrated.get_irrigation("legacy").status, IrrigationStatus.AUTHORIZED)  # type: ignore[union-attr]
+                self.assertTrue(migrated.reject_authorized_irrigation("legacy", DenyReason.ENGINE_FAILED))
+            finally:
+                migrated.close()
 
 
 class OperatorTests(DatabaseTestCase):
