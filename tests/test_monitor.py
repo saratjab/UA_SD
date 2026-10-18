@@ -3,9 +3,10 @@ from __future__ import annotations
 import socket
 import threading
 import unittest
+from unittest.mock import patch
 
 from common import protocol
-from WM_WS.WM_WS_M.config import MonitorConfig
+from WM_WS.WM_WS_M.config import MonitorConfig, parse_args
 from WM_WS.WM_WS_M.monitor import WateringStationMonitor
 
 
@@ -108,6 +109,53 @@ class MonitorTests(unittest.TestCase):
             self.assertEqual(self.central.faults[0][0], "connection_lost")
         finally:
             monitor_sock.close()
+
+    def test_cli_defaults_health_interval_to_exactly_one_second(self) -> None:
+        config = parse_args([
+            "--ws-id", "WS_001", "--central-host", "127.0.0.1", "--central-port", "5000",
+            "--engine-host", "127.0.0.1", "--engine-port", "6000",
+        ])
+        self.assertEqual(config.health_interval, 1.0)
+
+    def test_monitor_engine_schedules_repeated_checks_at_configured_interval(self) -> None:
+        self.monitor.config = parse_args([
+            "--ws-id", "WS_001", "--central-host", "127.0.0.1", "--central-port", "5000",
+            "--engine-host", "127.0.0.1", "--engine-port", "6000",
+        ])
+        monitor_sock, engine_sock = socket.socketpair()
+        received_sequences: list[int] = []
+        sleeps: list[float] = []
+
+        class StopAfterChecks(Exception):
+            pass
+
+        def answer_checks() -> None:
+            for _ in range(2):
+                request = protocol.receive_message(engine_sock)
+                received_sequences.append(request["sequence"])
+                protocol.send_message(engine_sock, {
+                    "type": "HEALTH_OK", "ws_id": "WS_001", "sequence": request["sequence"], "status": "OK",
+                })
+
+        responder = threading.Thread(target=answer_checks)
+        responder.start()
+
+        def stop_after_two(interval: float) -> None:
+            sleeps.append(interval)
+            if len(sleeps) == 2:
+                raise StopAfterChecks
+
+        try:
+            with patch("WM_WS.WM_WS_M.monitor.time.sleep", side_effect=stop_after_two):
+                with self.assertRaises(StopAfterChecks):
+                    self.monitor.monitor_engine(monitor_sock)
+            responder.join(timeout=1)
+            self.assertFalse(responder.is_alive())
+            self.assertEqual(received_sequences, [1, 2])
+            self.assertEqual(sleeps, [1.0, 1.0])
+        finally:
+            monitor_sock.close()
+            engine_sock.close()
 
     def _answer_one_health_check_in_thread(
         self,
