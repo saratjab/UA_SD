@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import unittest
 import time
+from unittest import mock
 
-from common.kafka_contract import envelope
+from common.kafka_contract import COMMAND_REJECTION_REASONS, encode, envelope
+from common.kafka_transport import KafkaWorker
 from WM_WS.WM_WS_E.config import EngineConfig
 from WM_WS.WM_WS_E.engine import WateringStationEngine
 from WM_WS.WM_WS_E.flow_meter import FlowMeter
@@ -15,6 +17,27 @@ from WM_WS.WM_WS_E.valve import SolenoidValve
 class FakePublisher:
     def __init__(self) -> None: self.records = []
     def publish(self, topic, message) -> None: self.records.append((topic, message))
+
+
+class OneMessage:
+    def __init__(self, value: bytes) -> None: self._value = value
+    def error(self): return None
+    def value(self): return self._value
+    def topic(self): return "wm.ws.commands"
+    def partition(self): return 0
+    def offset(self): return 0
+    def timestamp(self): return (1, int(time.time() * 1000))
+
+
+class OneMessageConsumer:
+    def __init__(self, value: bytes) -> None: self.message = OneMessage(value)
+    def poll(self, _timeout):
+        message, self.message = self.message, None
+        return message
+    def assignment(self): return []
+    def commit(self, **_kwargs): pass
+    def subscribe(self, _topics): pass
+    def close(self): pass
 
 
 class EngineKafkaTests(unittest.TestCase):
@@ -36,6 +59,38 @@ class EngineKafkaTests(unittest.TestCase):
         self.assertTrue(engine.irrigation.wait_until_finished(1))
         kinds = [message["event_type"] for _, message in publisher.records]
         self.assertIn("IRRIGATION_STARTED", kinds); self.assertIn("IRRIGATION_COMPLETED", kinds)
+
+    def test_kafka_command_is_dispatched_promptly_and_completes(self) -> None:
+        valve = SolenoidValve()
+        engine = self.engine(IrrigationController("WS_001", valve, FlowMeter(6), .005))
+        publisher = FakePublisher()
+        service = EngineKafkaService(engine, publisher)  # type: ignore[arg-type]
+        command = envelope(
+            "START_IRRIGATION", {"duration_seconds": .05}, ws_id="WS_001",
+            operator_id="OP_001", request_id="prompt-command",
+        )
+        worker = KafkaWorker(
+            "localhost", "engine-group", ["wm.ws.commands"], service.handle_bytes,
+            OneMessageConsumer(encode(command)),
+        )
+        started = time.monotonic()
+        self.assertTrue(worker.poll_once(.01))
+        dispatch_elapsed = time.monotonic() - started
+        self.assertLess(dispatch_elapsed, .5, "Engine command dispatch unexpectedly blocked")
+        self.assertTrue(valve.is_open, "valve did not open during command dispatch")
+        self.assertTrue(engine.irrigation.wait_until_finished(1))
+        event_types = [message["event_type"] for _, message in publisher.records]
+        self.assertIn("IRRIGATION_STARTED", event_types)
+        self.assertIn("IRRIGATION_COMPLETED", event_types)
+
+    def test_engine_worker_uses_stable_static_group_member_id(self) -> None:
+        engine = self.engine()
+        service = EngineKafkaService(engine, FakePublisher())  # type: ignore[arg-type]
+        with mock.patch("common.kafka_transport.Consumer") as consumer_factory:
+            service.worker("localhost")
+        config = consumer_factory.call_args.args[0]
+        self.assertEqual(config["group.id"], "wm-ws-engine-WS_001-v1")
+        self.assertEqual(config["group.instance.id"], "wm-ws-engine-WS_001-instance")
 
     def test_block_closes_active_valve(self) -> None:
         valve = SolenoidValve(); engine = self.engine(IrrigationController("WS_001", valve, FlowMeter(6), .1))
@@ -96,3 +151,4 @@ class EngineKafkaTests(unittest.TestCase):
         service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 1}, ws_id="WS_001", operator_id="OP", request_id="r1"))
         rejected = [message for _, message in publisher.records if message["event_type"] == "COMMAND_REJECTED"]
         self.assertEqual(rejected[0]["payload"]["reason"], "MONITOR_UNAVAILABLE")
+        self.assertIn(rejected[0]["payload"]["reason"], COMMAND_REJECTION_REASONS)

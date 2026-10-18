@@ -4,7 +4,7 @@ import unittest
 
 from common.kafka_contract import decode, envelope
 from WM_Central.kafka_service import CentralKafkaService
-from WM_Central.models import IrrigationStatus
+from WM_Central.models import DenyReason, IrrigationStatus
 from WM_Central.state_manager import StateManager
 from .helpers import DatabaseTestCase
 
@@ -158,4 +158,14 @@ class CentralKafkaTests(DatabaseTestCase):
         record = self.db.get_irrigation("request-1")
         self.assertEqual(record.status, IrrigationStatus.DENIED)  # type: ignore[union-attr]
         self.assertEqual(record.deny_reason.value, "ENGINE_FAILED")  # type: ignore[union-attr]
+
+    def test_monitor_unavailable_rejection_is_valid_and_persisted(self) -> None:
+        self.service.handle_activation(self.request())
+        self.service.handle_engine_event(envelope(
+            "COMMAND_REJECTED", {"reason": "MONITOR_UNAVAILABLE"},
+            ws_id="WS_001", request_id="request-1",
+        ))
+        record = self.db.get_irrigation("request-1")
+        self.assertEqual(record.status, IrrigationStatus.DENIED)  # type: ignore[union-attr]
+        self.assertEqual(record.deny_reason, DenyReason.MONITOR_UNAVAILABLE)  # type: ignore[union-attr]
 

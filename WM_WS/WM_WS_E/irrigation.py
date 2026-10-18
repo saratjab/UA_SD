@@ -87,7 +87,10 @@ class IrrigationController:
             self._stop_event.clear()
             self._stop_reason = "manual"
             self.valve.open()
-            LOGGER.info("Irrigation started")
+            LOGGER.info(
+                "Irrigation started operator_id=%s duration_seconds=%.3f",
+                request.operator_id, request.duration_seconds,
+            )
             self._thread = threading.Thread(
                 target=self._run,
                 args=(request,),

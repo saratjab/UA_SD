@@ -62,6 +62,14 @@ class KafkaWorkerTests(unittest.TestCase):
                         auto_offset_reset="latest")
         self.assertEqual(consumer_factory.call_args.args[0]["auto.offset.reset"], "latest")
 
+    def test_static_member_identity_is_passed_to_new_consumer(self) -> None:
+        with mock.patch("common.kafka_transport.Consumer") as consumer_factory:
+            KafkaWorker(
+                "localhost", "engine-group", ["commands"], lambda _raw: True,
+                group_instance_id="engine-instance",
+            )
+        self.assertEqual(consumer_factory.call_args.args[0]["group.instance.id"], "engine-instance")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -132,7 +132,9 @@ class Database:
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='irrigations'"
         ).fetchone()
-        if row is None or ("ENGINE_BLOCKED" in row["sql"] and "ENGINE_FAILED" in row["sql"]):
+        if row is None or all(reason in row["sql"] for reason in (
+            "ENGINE_BLOCKED", "ENGINE_FAILED", "MONITOR_UNAVAILABLE",
+        )):
             return
         conn.execute("PRAGMA foreign_keys = OFF")
         try:
@@ -144,7 +146,7 @@ class Database:
                 ws_id TEXT NOT NULL REFERENCES watering_stations (ws_id),
                 operator_id TEXT REFERENCES operators (operator_id),
                 status TEXT NOT NULL CHECK (status IN ('DENIED', 'AUTHORIZED', 'WATERING', 'ENDED')),
-                deny_reason TEXT CHECK (deny_reason IN ('WS_DISCONNECTED', 'WS_LEAK', 'WS_OUT_OF_SERVICE', 'WS_BUSY', 'OPERATOR_INACTIVE', 'ENGINE_BLOCKED', 'ENGINE_FAILED')),
+                deny_reason TEXT CHECK (deny_reason IN ('WS_DISCONNECTED', 'WS_LEAK', 'WS_OUT_OF_SERVICE', 'WS_BUSY', 'OPERATOR_INACTIVE', 'ENGINE_BLOCKED', 'ENGINE_FAILED', 'MONITOR_UNAVAILABLE')),
                 requested_duration_s INTEGER CHECK (requested_duration_s IS NULL OR requested_duration_s > 0),
                 requested_at TEXT NOT NULL,
                 started_at TEXT,
@@ -378,7 +380,7 @@ class Database:
 
     def reject_authorized_irrigation(self, request_id: str, reason: DenyReason) -> bool:
         """Record an Engine rejection before watering as DENIED, not ENDED."""
-        if reason not in {DenyReason.ENGINE_BLOCKED, DenyReason.ENGINE_FAILED}:
+        if reason not in {DenyReason.ENGINE_BLOCKED, DenyReason.ENGINE_FAILED, DenyReason.MONITOR_UNAVAILABLE}:
             raise ValueError("reason must describe an Engine start rejection")
         with self.transaction() as conn:
             cursor = conn.execute(
