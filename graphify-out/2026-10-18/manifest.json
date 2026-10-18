@@ -1,0 +1,458 @@
+{
+  ".codex/hooks.json": {
+    "mtime": 1792335552.0177355,
+    "seen": 1792354315.5705225,
+    "ast_hash": "005ac71c84af2cae38e255e2b9de2411",
+    "semantic_hash": "005ac71c84af2cae38e255e2b9de2411"
+  },
+  "WM_Central/__init__.py": {
+    "mtime": 1792335552.0304463,
+    "seen": 1792354315.5705378,
+    "ast_hash": "c3dfc9d82062b50ca74b30c19b54d19f",
+    "semantic_hash": "c3dfc9d82062b50ca74b30c19b54d19f"
+  },
+  "WM_Central/config.py": {
+    "mtime": 1792335552.0308547,
+    "seen": 1792354315.5705452,
+    "ast_hash": "67b9223b279209ebbdabe86ad0650044",
+    "semantic_hash": "67b9223b279209ebbdabe86ad0650044"
+  },
+  "WM_Central/database.py": {
+    "mtime": 1792353881.0602336,
+    "seen": 1792354315.5705514,
+    "ast_hash": "f324c19decf6f17dadf4dcde3a235938",
+    "semantic_hash": ""
+  },
+  "WM_Central/db/schema.sql": {
+    "mtime": 1791278146.7482069,
+    "seen": 1791753559.9487522,
+    "ast_hash": "",
+    "semantic_hash": ""
+  },
+  "WM_Central/db/seed_dev.sql": {
+    "mtime": 1791278146.7489567,
+    "seen": 1791753559.948755,
+    "ast_hash": "",
+    "semantic_hash": ""
+  },
+  "WM_Central/main.py": {
+    "mtime": 1792335552.034275,
+    "seen": 1792354315.5705616,
+    "ast_hash": "1382f3929eba06ed2a664911b4465de8",
+    "semantic_hash": ""
+  },
+  "WM_Central/models.py": {
+    "mtime": 1792353881.0622337,
+    "seen": 1792354315.5705662,
+    "ast_hash": "78ab7b9dff553cc940dc4a5449224e08",
+    "semantic_hash": ""
+  },
+  "WM_Central/monitoring.py": {
+    "mtime": 1792335552.0354698,
+    "seen": 1792354315.5705705,
+    "ast_hash": "e69c6d8049e08336bc35da3eb6179b29",
+    "semantic_hash": ""
+  },
+  "WM_Central/socket_server.py": {
+    "mtime": 1792335552.036147,
+    "seen": 1792354315.5705757,
+    "ast_hash": "5894d2648c3863c3f1a133c68dee7703",
+    "semantic_hash": "5894d2648c3863c3f1a133c68dee7703"
+  },
+  "WM_Central/state_manager.py": {
+    "mtime": 1792335552.0368187,
+    "seen": 1792354315.5705814,
+    "ast_hash": "c79b5b4a03875367975e8e8dfe5e0428",
+    "semantic_hash": ""
+  },
+  "WM_Central/tests/__init__.py": {
+    "mtime": 1792335552.0368187,
+    "seen": 1792354315.5705862,
+    "ast_hash": "044411b0651d9b14686acd250804816f",
+    "semantic_hash": "044411b0651d9b14686acd250804816f"
+  },
+  "WM_Central/tests/helpers.py": {
+    "mtime": 1792335552.0376263,
+    "seen": 1792354315.570591,
+    "ast_hash": "dcc93fe6afeba0fb2f7d1dac75c8b979",
+    "semantic_hash": "dcc93fe6afeba0fb2f7d1dac75c8b979"
+  },
+  "WM_Central/tests/test_database.py": {
+    "mtime": 1792353881.0662336,
+    "seen": 1792354315.5706024,
+    "ast_hash": "789c76042d6acc998ed8608a25c6f466",
+    "semantic_hash": ""
+  },
+  "WM_Central/tests/test_socket_server.py": {
+    "mtime": 1792335552.0398178,
+    "seen": 1792354315.570613,
+    "ast_hash": "2ccc2847c6ae4dacd9016e61aa8fe5bb",
+    "semantic_hash": "2ccc2847c6ae4dacd9016e61aa8fe5bb"
+  },
+  "WM_Central/tests/test_state_manager.py": {
+    "mtime": 1792353881.0702336,
+    "seen": 1792354315.570618,
+    "ast_hash": "d30493096097c7eab016789f817039bf",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_E/__init__.py": {
+    "mtime": 1791146519.3723536,
+    "seen": 1791753559.9487834,
+    "ast_hash": "976e56c8def029d334debd2afcef05c4",
+    "semantic_hash": "976e56c8def029d334debd2afcef05c4"
+  },
+  "WM_WS/WM_WS_E/config.py": {
+    "mtime": 1792353881.07394,
+    "seen": 1792354315.571307,
+    "ast_hash": "63042cea6b1242f18261cdb505c1f339",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_E/engine.py": {
+    "mtime": 1792353881.0746872,
+    "seen": 1792354315.5713127,
+    "ast_hash": "58715473913d85ccda5a21b0dbac5d3e",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_E/flow_meter.py": {
+    "mtime": 1791146519.372625,
+    "seen": 1791753559.9487903,
+    "ast_hash": "eb2336ffde8fbcf224c93b8a14a3edfd",
+    "semantic_hash": "eb2336ffde8fbcf224c93b8a14a3edfd"
+  },
+  "WM_WS/WM_WS_E/irrigation.py": {
+    "mtime": 1792353881.0754344,
+    "seen": 1792354315.5717044,
+    "ast_hash": "e3db991051be90effd58787c9d38bc2a",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_E/main.py": {
+    "mtime": 1792353881.0766714,
+    "seen": 1792354315.5717158,
+    "ast_hash": "db08c0060a6bb984bc616c9e29ef1535",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_E/valve.py": {
+    "mtime": 1791146519.372625,
+    "seen": 1791753559.9488068,
+    "ast_hash": "68abbf1af0af9a7c38ab9cf0757def33",
+    "semantic_hash": "68abbf1af0af9a7c38ab9cf0757def33"
+  },
+  "WM_WS/WM_WS_M/__init__.py": {
+    "mtime": 1791146519.372625,
+    "seen": 1791753559.948809,
+    "ast_hash": "6c2452e877c16f1b799c45c577b861be",
+    "semantic_hash": "6c2452e877c16f1b799c45c577b861be"
+  },
+  "WM_WS/WM_WS_M/central_client.py": {
+    "mtime": 1792353881.0766714,
+    "seen": 1792354315.5724914,
+    "ast_hash": "9d412cf9512bf53b64a64b81afc8bff3",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_M/config.py": {
+    "mtime": 1792335552.044996,
+    "seen": 1792354315.5724974,
+    "ast_hash": "d21f99619b58dcaedcf48fb89de22c03",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_M/main.py": {
+    "mtime": 1792335552.0457356,
+    "seen": 1792354315.5725026,
+    "ast_hash": "bc923819ae6b86edcbad754ef7e14cee",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_M/monitor.py": {
+    "mtime": 1792353881.0772336,
+    "seen": 1792354315.5725074,
+    "ast_hash": "c4699a0d08fce7368e0ae422afebd635",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_M/ws_e_server.py": {
+    "mtime": 1792335552.0467355,
+    "seen": 1792354315.5725121,
+    "ast_hash": "8ab80906e04c79bc62a68d38484fda19",
+    "semantic_hash": ""
+  },
+  "common/__init__.py": {
+    "mtime": 1792335552.0467355,
+    "seen": 1792354315.5725172,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "common/protocol.py": {
+    "mtime": 1792335552.0517356,
+    "seen": 1792354315.5725331,
+    "ast_hash": "e35ad9f931809752aee3b4026d9066e3",
+    "semantic_hash": "e35ad9f931809752aee3b4026d9066e3"
+  },
+  "common/tests/__init__.py": {
+    "mtime": 1792335552.0517356,
+    "seen": 1792354315.5725386,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "common/tests/test_protocol.py": {
+    "mtime": 1792335552.0542994,
+    "seen": 1792354315.572549,
+    "ast_hash": "7068de16a53c0a6a933022fe27b20a4f",
+    "semantic_hash": "7068de16a53c0a6a933022fe27b20a4f"
+  },
+  "tests/__init__.py": {
+    "mtime": 1791146519.3741248,
+    "seen": 1791753559.9488332,
+    "ast_hash": "f0a142e445f27dc014605f547ab2bd40",
+    "semantic_hash": "f0a142e445f27dc014605f547ab2bd40"
+  },
+  "tests/test_central_client.py": {
+    "mtime": 1792353881.0852337,
+    "seen": 1792354315.5729227,
+    "ast_hash": "1cd763e70137fad8b5b0496e8a6c7d6d",
+    "semantic_hash": ""
+  },
+  "tests/test_messages.py": {
+    "mtime": 1792335552.1712673,
+    "seen": 1792354315.572956,
+    "ast_hash": "91e09f86383903fc597180391533c402",
+    "semantic_hash": ""
+  },
+  "tests/test_monitor.py": {
+    "mtime": 1792353881.0890906,
+    "seen": 1792354315.572961,
+    "ast_hash": "00b3234e26d6ab14bc834d374b49ef56",
+    "semantic_hash": ""
+  },
+  "tests/test_protocol.py": {
+    "mtime": 1792335552.172357,
+    "seen": 1792354315.5729663,
+    "ast_hash": "91ea628173349406f9f4033ea9ffedd2",
+    "semantic_hash": ""
+  },
+  "tests/test_ws_e_engine.py": {
+    "mtime": 1792353881.0904846,
+    "seen": 1792354315.5729764,
+    "ast_hash": "88a63791ca2d111c500801ab07000b98",
+    "semantic_hash": ""
+  },
+  "tests/test_ws_e_server.py": {
+    "mtime": 1792335552.1741889,
+    "seen": 1792354315.5729818,
+    "ast_hash": "dbdffc597dce0b05c3d5d722e4d5889a",
+    "semantic_hash": ""
+  },
+  "AGENTS.md": {
+    "mtime": 1792335552.0294464,
+    "seen": 1792354315.5729868,
+    "ast_hash": "6a47d64fcc136324ca395065a707ef76",
+    "semantic_hash": "6a47d64fcc136324ca395065a707ef76"
+  },
+  "docs/adr/ADR-001-state-model-and-schema.md": {
+    "mtime": 1792353881.07967,
+    "seen": 1792354315.5730271,
+    "ast_hash": "ebe3c31549710e900cb6c77f17d18078",
+    "semantic_hash": ""
+  },
+  "tests/test_wm_ws_integration.py": {
+    "mtime": 1792335552.1728141,
+    "seen": 1792354315.5729718,
+    "ast_hash": "fc2ba302fc733ba96fc98020afb5490a",
+    "semantic_hash": ""
+  },
+  "PROJECT_CONTEXT.md": {
+    "mtime": 1792335552.0300229,
+    "seen": 1792354315.5729976,
+    "ast_hash": "8058beca9f72694c7a7940deaaabc219",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1792353887.7912467,
+    "seen": 1792354315.5730023,
+    "ast_hash": "b4d706c51d7dc7e1707600da2274ffb8",
+    "semantic_hash": ""
+  },
+  "WM_Central/kafka_service.py": {
+    "mtime": 1792353881.0622337,
+    "seen": 1792354315.5705569,
+    "ast_hash": "9b11c9485e65357ca08af01cc21fb7da",
+    "semantic_hash": ""
+  },
+  "WM_Central/tests/test_kafka_service.py": {
+    "mtime": 1792353881.0672336,
+    "seen": 1792354315.5706074,
+    "ast_hash": "ed9357ee9facaf1fd3038b00af164335",
+    "semantic_hash": ""
+  },
+  "WM_WS/WM_WS_E/kafka_service.py": {
+    "mtime": 1792353881.0760844,
+    "seen": 1792354315.5717108,
+    "ast_hash": "7fe220682dc19a6db1ac9b34849ccc51",
+    "semantic_hash": ""
+  },
+  "common/kafka_contract.py": {
+    "mtime": 1792353881.0782337,
+    "seen": 1792354315.5725222,
+    "ast_hash": "d12e20b7bd6587e6b2d5186c07379e5e",
+    "semantic_hash": ""
+  },
+  "common/kafka_transport.py": {
+    "mtime": 1792353881.07967,
+    "seen": 1792354315.572528,
+    "ast_hash": "f1ed8b36b511540f1ed81bbaa170c3c1",
+    "semantic_hash": ""
+  },
+  "common/tests/test_kafka_contract.py": {
+    "mtime": 1792335552.0527356,
+    "seen": 1792354315.572544,
+    "ast_hash": "e952d5e3fc52c45af895dbbda1cd1156",
+    "semantic_hash": ""
+  },
+  "tests/test_engine_kafka_service.py": {
+    "mtime": 1792353881.086489,
+    "seen": 1792354315.572929,
+    "ast_hash": "fcc772913cd0b202904df72c435efbd2",
+    "semantic_hash": ""
+  },
+  "tests/test_kafka_real_integration.py": {
+    "mtime": 1792353881.088495,
+    "seen": 1792354315.5729465,
+    "ast_hash": "f97d61abc0ba0c445df48e42005cd144",
+    "semantic_hash": ""
+  },
+  "docker-compose.kafka.yml": {
+    "mtime": 1792335552.0548573,
+    "seen": 1792354315.573012,
+    "ast_hash": "65be15cdbcbf3cc8f300e118d6887db6",
+    "semantic_hash": ""
+  },
+  "docs/kafka-message-contract.md": {
+    "mtime": 1792353881.0815337,
+    "seen": 1792354315.5730321,
+    "ast_hash": "86a9e2d1cb9a077d7cc48a89076dd620",
+    "semantic_hash": ""
+  },
+  "prompts/kafka-irrigation-lifecycle.md": {
+    "mtime": 1792353881.0832336,
+    "seen": 1792354315.573056,
+    "ast_hash": "d310db93936dcc16e2d78da7bc0bb32c",
+    "semantic_hash": ""
+  },
+  "requirements.txt": {
+    "mtime": 1792335552.1683543,
+    "seen": 1792354315.5730612,
+    "ast_hash": "6dc17402907ff42e27faefea7778c320",
+    "semantic_hash": ""
+  },
+  "WM_FO/__init__.py": {
+    "mtime": 1792335552.040367,
+    "seen": 1792354315.5706236,
+    "ast_hash": "bdd0ef6a8abaf6ce82f487bced00e332",
+    "semantic_hash": ""
+  },
+  "WM_FO/config.py": {
+    "mtime": 1792335552.0411758,
+    "seen": 1792354315.5706291,
+    "ast_hash": "5d066cb18c24b7a25ee75af27c0702c9",
+    "semantic_hash": ""
+  },
+  "WM_FO/display.py": {
+    "mtime": 1792353881.0712335,
+    "seen": 1792354315.570634,
+    "ast_hash": "205e2a2173b9dfac3a1933be7f6fe67d",
+    "semantic_hash": ""
+  },
+  "WM_FO/kafka_client.py": {
+    "mtime": 1792353881.072537,
+    "seen": 1792354315.5706394,
+    "ast_hash": "0f205ff693f89916a993f8fce41e30bf",
+    "semantic_hash": ""
+  },
+  "WM_FO/main.py": {
+    "mtime": 1792353881.0732486,
+    "seen": 1792354315.5706446,
+    "ast_hash": "3e34d876af6b82397a4bb98bb0c75128",
+    "semantic_hash": ""
+  },
+  "WM_FO/request_file.py": {
+    "mtime": 1792335552.0427966,
+    "seen": 1792354315.5706496,
+    "ast_hash": "2127edc64216a118a3aee87331cc8cb0",
+    "semantic_hash": ""
+  },
+  "WaterManagement_Project_Plan_Complete.md": {
+    "mtime": 1792353887.7982466,
+    "seen": 1792354315.573007,
+    "ast_hash": "520a06049cdb6009b690828775898e75",
+    "semantic_hash": ""
+  },
+  "Blank diagram (1).pdf": {
+    "mtime": 1792353887.7905579,
+    "seen": 1792354315.5730658,
+    "ast_hash": "c41b6e5f4f217b83ecc41789c0aee788",
+    "semantic_hash": ""
+  },
+  "WM_Central/tests/test_control_and_monitoring.py": {
+    "mtime": 1792335552.0381076,
+    "seen": 1792354315.5705974,
+    "ast_hash": "93cd995f7d299e806b09f6762151810e",
+    "semantic_hash": ""
+  },
+  "tests/test_fo_kafka_client.py": {
+    "mtime": 1792353881.0872,
+    "seen": 1792354315.572935,
+    "ast_hash": "d62de944e705c7f91ee8cc643c2fb628",
+    "semantic_hash": ""
+  },
+  "tests/test_fo_main.py": {
+    "mtime": 1792353881.0877328,
+    "seen": 1792354315.5729408,
+    "ast_hash": "f216aa3085c2de71786e72fef38e4f28",
+    "semantic_hash": ""
+  },
+  "tests/test_kafka_transport.py": {
+    "mtime": 1792353881.0890906,
+    "seen": 1792354315.572951,
+    "ast_hash": "a3404608ad53a3cc6e1be0c77092c412",
+    "semantic_hash": ""
+  },
+  "Nombres.txt": {
+    "mtime": 1792353881.0592387,
+    "seen": 1792354315.572992,
+    "ast_hash": "ddbeb82deff1576f3c41e994e6fdbfb8",
+    "semantic_hash": ""
+  },
+  "docker-compose.local.yml": {
+    "mtime": 1792354251.897841,
+    "seen": 1792354315.5730166,
+    "ast_hash": "2182f94daa305fde181642f06154b414",
+    "semantic_hash": ""
+  },
+  "docker-compose.railway.yml": {
+    "mtime": 1792354261.6308544,
+    "seen": 1792354315.573022,
+    "ast_hash": "08df1b5ea36be80efd3d1627cd1fa6af",
+    "semantic_hash": ""
+  },
+  "docs/local-docker-deployment.md": {
+    "mtime": 1792354276.4368749,
+    "seen": 1792354315.5730371,
+    "ast_hash": "151a5de545b641de48136c78b595be4c",
+    "semantic_hash": ""
+  },
+  "docs/railway-deployment.md": {
+    "mtime": 1792353887.8382466,
+    "seen": 1792354315.573042,
+    "ast_hash": "bfdebb0be8016e59f4e08594d30e08fe",
+    "semantic_hash": ""
+  },
+  "docs/report.md": {
+    "mtime": 1792353881.0822895,
+    "seen": 1792354315.5730467,
+    "ast_hash": "0bc449ef668bd24725d8775d55a10bcc",
+    "semantic_hash": ""
+  },
+  "prompts/README.md": {
+    "mtime": 1792353881.0822895,
+    "seen": 1792354315.5730515,
+    "ast_hash": "6d64f0fc162694a5176f5592175cd34c",
+    "semantic_hash": ""
+  }
+}
