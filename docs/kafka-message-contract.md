@@ -56,16 +56,19 @@ it to FO.
 can still follow if Engine state changed before command delivery.
 
 Central groups are `wm-central-activation-v1` and `wm-central-events-v1`; an
-Engine uses `wm-ws-engine-<ws_id>-v1`. Each FO process uses a unique group ID
-and displays only events whose `request_id` is pending in that process. This
-broadcasts operator events to concurrent terminals while keeping each request
-with its submitter. FO waits for partition assignment before accepting requests
-and starts its process-specific group at the latest offset, avoiding replayed
-history without skipping events produced after the session starts. Consumers disable auto commit and commit
-only after successful handling. SQLite request uniqueness and terminal updates
-provide idempotency, but a process crash after a broker publish and before offset
-commit can produce a duplicate notification/command; consumers must remain
-idempotent. This is at-least-once delivery, not a claim of exactly-once execution.
+Engine uses `wm-ws-engine-<ws_id>-v1`. FO uses a stable
+`wm-field-operator-<operator_id>-v1` group. A returning operator resumes at the
+group's last committed offset and can receive results produced while its FO
+process was down. A new operator group starts at the latest offset, so it does
+not replay old topic history. Different operators have separate groups and FO
+filters each event by `operator_id`. Run one active FO consumer per operator at
+a time: Kafka group members load-balance partitions rather than broadcasting
+each event to every same-operator terminal. FO displays a completed event even
+when its original in-memory request waiter was lost to a process crash, and
+deduplicates terminal request IDs within the process. Consumers disable auto
+commit and commit only after successful handling. This remains at-least-once
+delivery; a crash after display but before offset commit can result in a
+repeated display after restart.
 
 ## Local development
 

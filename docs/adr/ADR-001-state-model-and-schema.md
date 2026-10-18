@@ -70,8 +70,9 @@ Facts that constrain the design:
    `MANUAL`, `LEAK`, `BLOCKED`. CENTRAL-inferred (no final event can arrive):
    `DISCONNECTED`, `CENTRAL_RESTART`. An Engine rejection before watering is
    recorded as `DENIED` with `ENGINE_BLOCKED` or `ENGINE_FAILED`; it is not an
-   ended irrigation. On every start CENTRAL closes any
-   AUTHORIZED/WATERING row as `CENTRAL_RESTART`.
+   ended irrigation. On startup CENTRAL closes an `AUTHORIZED` row as
+   `CENTRAL_RESTART`, while retaining `WATERING` rows so the Engine's durable
+   Kafka telemetry and completion can be processed after recovery.
    If CENTRAL first ends a row for a fault, block, or disconnect and a final
    Engine completion later arrives, the safety end reason remains authoritative,
    while the completion supplies the actual valve-stop `ended_at` and final

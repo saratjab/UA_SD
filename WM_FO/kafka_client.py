@@ -19,12 +19,14 @@ class FieldOperator:
     def __init__(self, operator_id: str, publisher: KafkaPublisher) -> None:
         self.operator_id = operator_id
         self.publisher = publisher
-        # Each process needs its own copy of operator events so it can route
-        # them by request_id to the terminal that submitted the request.
-        self._consumer_group_id = f"wm-field-operator-{operator_id}-v1-{uuid4()}"
+        # Stable per-operator offsets let a restarted terminal resume events
+        # produced after its last successful commit. Different operators keep
+        # independent groups and therefore cannot consume one another's results.
+        self._consumer_group_id = f"wm-field-operator-{operator_id}-v1"
         self._lock = threading.RLock()
         self._pending: dict[str, threading.Event] = {}
         self._results: dict[str, dict[str, Any]] = {}
+        self._shown_terminal_request_ids: set[str] = set()
 
     def worker(self, bootstrap: str, consumer: Any | None = None) -> KafkaWorker:
         return KafkaWorker(bootstrap, self._consumer_group_id,
@@ -68,14 +70,24 @@ class FieldOperator:
         if message.get("operator_id") != self.operator_id:
             return True
         request_id = message.get("request_id")
+        event_type = message["event_type"]
         with self._lock:
             waiter = self._pending.get(request_id) if isinstance(request_id, str) else None
-        # Operator events are broadcast to each process group. Only the process
-        # that owns the pending request displays and completes that interaction.
-        if waiter is None:
+            is_terminal = isinstance(request_id, str) and event_type in TERMINAL_EVENTS
+            if is_terminal and request_id in self._shown_terminal_request_ids:
+                return True
+            # A completion can be waiting at the group's committed offset after
+            # this FO process died. Show it even though the new process has no
+            # in-memory waiter for the old request.
+            recoverable = is_terminal
+            if waiter is None and not recoverable:
+                return True
+            if is_terminal:
+                self._shown_terminal_request_ids.add(request_id)
+        if waiter is None and not recoverable:
             return True
         show_event(message)
-        if request_id and message["event_type"] in TERMINAL_EVENTS:
+        if waiter is not None and is_terminal:
             with self._lock:
                 waiter = self._pending.get(request_id)
                 if waiter is not None:

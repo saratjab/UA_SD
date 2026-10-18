@@ -217,6 +217,14 @@ class IrrigationTests(DatabaseTestCase):
         record = self.db.get_irrigation("r1")
         self.assertEqual(record.end_reason, EndReason.CENTRAL_RESTART)
 
+    def test_startup_recovery_preserves_watering_for_replayed_engine_events(self) -> None:
+        self.request("r1")
+        self.db.mark_irrigation_started("r1", "2026-10-05T10:00:01Z")
+        self.assertEqual(self.db.recover_open_irrigations(), 0)
+        record = self.db.get_irrigation("r1")
+        self.assertEqual(record.status, IrrigationStatus.WATERING)
+        self.assertEqual(self.db.get_live_irrigation("WS_001").request_id, "r1")  # type: ignore[union-attr]
+
     def test_unknown_operator_violates_foreign_key(self) -> None:
         with self.assertRaises(sqlite3.IntegrityError):
             self.request("r1", operator="OP_999")

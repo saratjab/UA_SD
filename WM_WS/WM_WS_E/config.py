@@ -15,6 +15,14 @@ class EngineConfig:
     default_irrigation_duration: float
     socket_timeout: float
     telemetry_interval: float
+    reconnect_initial_delay: float = 0.5
+    reconnect_max_delay: float = 5.0
+
+    def __post_init__(self) -> None:
+        if self.reconnect_initial_delay <= 0:
+            raise ValueError("reconnect_initial_delay must be greater than zero")
+        if self.reconnect_max_delay < self.reconnect_initial_delay:
+            raise ValueError("reconnect_max_delay must be at least reconnect_initial_delay")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,6 +56,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="Seconds between generated irrigation telemetry records",
     )
+    parser.add_argument(
+        "--reconnect-initial-delay",
+        type=float,
+        default=0.5,
+        help="Initial delay in seconds before retrying a failed Monitor connection",
+    )
+    parser.add_argument(
+        "--reconnect-max-delay",
+        type=float,
+        default=5.0,
+        help="Maximum delay in seconds between Monitor connection retries",
+    )
     return parser
 
 
@@ -63,4 +83,6 @@ def parse_args(argv: list[str] | None = None) -> EngineConfig:
         default_irrigation_duration=args.default_irrigation_duration,
         socket_timeout=args.socket_timeout,
         telemetry_interval=args.telemetry_interval,
+        reconnect_initial_delay=args.reconnect_initial_delay,
+        reconnect_max_delay=args.reconnect_max_delay,
     )

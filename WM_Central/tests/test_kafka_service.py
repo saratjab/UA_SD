@@ -47,6 +47,55 @@ class CentralKafkaTests(DatabaseTestCase):
         self.service.handle_engine_event(complete); self.service.handle_engine_event(complete)
         self.assertEqual(self.db.get_irrigation("request-1").status, IrrigationStatus.ENDED)  # type: ignore[union-attr]
 
+    def test_completion_after_central_restart_reaches_operator_once_with_final_measurements(self) -> None:
+        request_id = "central-restart-request"
+        self.service.handle_activation(self.request(request_id, duration=30))
+        self.service.handle_engine_event(envelope(
+            "IRRIGATION_STARTED", {}, ws_id="WS_001", request_id=request_id,
+        ))
+        for sequence in (1, 2):
+            self.service.handle_engine_event(envelope(
+                "IRRIGATION_TELEMETRY",
+                {"sequence": sequence, "flow_rate_lpm": 6.0,
+                 "accumulated_volume_liters": sequence / 10, "duration_seconds": float(sequence)},
+                ws_id="WS_001", request_id=request_id,
+            ))
+
+        # This is CENTRAL's startup recovery followed by service recreation.
+        # A WATERING record must survive so the retained Engine completion can
+        # perform the terminal transition after the event consumer restarts.
+        self.assertEqual(self.db.recover_open_irrigations(), 0)
+        restarted_state = StateManager(self.db)
+        restarted_state.register("WS_001", "North", object())
+        restarted_service = CentralKafkaService(self.db, restarted_state, self.publisher)  # type: ignore[arg-type]
+        restarted_service.handle_engine_event(envelope(
+            "IRRIGATION_TELEMETRY",
+            {"sequence": 3, "flow_rate_lpm": 6.0,
+             "accumulated_volume_liters": 0.3, "duration_seconds": 3.0},
+            ws_id="WS_001", request_id=request_id,
+        ))
+        completion = envelope(
+            "IRRIGATION_COMPLETED",
+            {"end_reason": "TIME_LIMIT", "duration_seconds": 30.0,
+             "accumulated_volume_liters": 3.0},
+            ws_id="WS_001", request_id=request_id,
+        )
+        restarted_service.handle_engine_event(completion)
+        restarted_service.handle_engine_event(completion)  # uncommitted source event replay
+
+        record = self.db.get_irrigation(request_id)
+        self.assertEqual(record.status, IrrigationStatus.ENDED)  # type: ignore[union-attr]
+        self.assertEqual(record.end_reason.value, "DURATION")  # type: ignore[union-attr]
+        self.assertEqual((record.duration_s, record.total_volume_l), (30.0, 3.0))  # type: ignore[union-attr]
+        completions = [
+            message for topic, message in self.publisher.records
+            if topic == "wm.operator.events" and message["event_type"] == "IRRIGATION_COMPLETED"
+            and message.get("request_id") == request_id
+        ]
+        self.assertEqual(len(completions), 1)
+        self.assertEqual(completions[0]["operator_id"], "OP_001")
+        self.assertEqual(completions[0]["payload"]["accumulated_volume_liters"], 3.0)
+
     def test_malformed_payload_is_consumed_without_crashing_partition(self) -> None:
         self.assertTrue(self.service.handle_activation_bytes(b"not json"))
 

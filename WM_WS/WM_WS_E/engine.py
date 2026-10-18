@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import socket
 import threading
-import time
 
 from common import protocol
 
@@ -32,6 +31,7 @@ class WateringStationEngine:
         self.failed = False
         self.blocked = False
         self.monitor_socket: socket.socket | None = None
+        self._monitor_ready = threading.Event()
         self._stop_event = threading.Event()
 
     @property
@@ -39,6 +39,10 @@ class WateringStationEngine:
         if self.failed:
             return IrrigationState.FAILED
         return self.irrigation.state
+
+    @property
+    def monitor_available(self) -> bool:
+        return self._monitor_ready.is_set()
 
     def connect_to_monitor(self) -> None:
         LOGGER.info("Connecting to WM_WS_M at %s:%s", self.config.monitor_host, self.config.monitor_port)
@@ -51,6 +55,7 @@ class WateringStationEngine:
 
     def close(self) -> None:
         self._stop_event.set()
+        self._monitor_ready.clear()
         # Shutting down the Engine must leave the actuator in its safe state.
         # Closing the Monitor socket alone would let an in-flight irrigation
         # thread keep the valve open until its scheduled duration elapsed.
@@ -74,6 +79,7 @@ class WateringStationEngine:
                 return False
             self.config = EngineConfig(**{**self.config.__dict__, "ws_id": assigned_ws_id})
             self.irrigation.ws_id = assigned_ws_id
+            self._monitor_ready.set()
             LOGGER.info("HELLO_ACK received")
             return True
         LOGGER.error("WM_WS_M rejected Engine connection: %s", response)
@@ -81,17 +87,20 @@ class WateringStationEngine:
 
     def run(self) -> int:
         LOGGER.info("WM_WS_E started")
+        retry_delay = min(self.config.reconnect_initial_delay, self.config.reconnect_max_delay)
         while not self._stop_event.is_set():
             try:
                 self.connect_to_monitor()
                 if self.send_hello():
+                    retry_delay = min(self.config.reconnect_initial_delay, self.config.reconnect_max_delay)
                     self.handle_monitor_messages()
                 self._disconnect_monitor()
             except (OSError, protocol.ProtocolError) as exc:
                 LOGGER.error("WM_WS_E communication error: %s", exc)
                 self._disconnect_monitor()
             if not self._stop_event.is_set():
-                time.sleep(0.1)
+                self._stop_event.wait(retry_delay)
+                retry_delay = min(retry_delay * 2, self.config.reconnect_max_delay)
         return 0
 
     def handle_monitor_messages(self) -> None:
@@ -106,14 +115,17 @@ class WateringStationEngine:
                 continue
             except protocol.ConnectionClosedError:
                 LOGGER.error("Monitor disconnected")
+                self._monitor_ready.clear()
                 self.irrigation.emergency_stop(reason="monitor_disconnected")
                 return
             except protocol.ProtocolError as exc:
                 LOGGER.error("Invalid protocol message from Monitor: %s", exc)
+                self._monitor_ready.clear()
                 self.irrigation.emergency_stop(reason="monitor_disconnected")
                 return
             except OSError as exc:
                 LOGGER.error("Monitor connection error: %s", exc)
+                self._monitor_ready.clear()
                 self.irrigation.emergency_stop(reason="monitor_disconnected")
                 return
 
@@ -157,6 +169,9 @@ class WateringStationEngine:
         LOGGER.info("Simulated KO cleared")
 
     def request_irrigation(self, operator_id: str, duration_seconds: float | None = None) -> bool:
+        if not self._monitor_ready.is_set():
+            LOGGER.warning("Irrigation rejected while WM_WS_M is unavailable")
+            return False
         if self.failed or self.blocked:
             LOGGER.warning("Irrigation rejected while Engine is failed")
             return False
@@ -180,6 +195,7 @@ class WateringStationEngine:
     def _disconnect_monitor(self) -> None:
         # Losing the Monitor removes the Engine's health/control path. Close the
         # actuator immediately; the controller still emits its final reading.
+        self._monitor_ready.clear()
         self.irrigation.emergency_stop(reason="monitor_disconnected")
         if self.monitor_socket is not None:
             try:

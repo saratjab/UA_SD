@@ -17,7 +17,7 @@ class FieldOperatorKafkaTests(unittest.TestCase):
         def publish(self, *_args, **_kwargs):
             pass
 
-    def test_same_operator_processes_use_independent_groups_and_route_by_request(self) -> None:
+    def test_same_operator_uses_stable_group_and_routes_live_events_by_request(self) -> None:
         publisher = self.Publisher()
         first = FieldOperator("OP_001", publisher)  # type: ignore[arg-type]
         second = FieldOperator("OP_001", publisher)  # type: ignore[arg-type]
@@ -31,19 +31,84 @@ class FieldOperatorKafkaTests(unittest.TestCase):
         with mock.patch("WM_FO.kafka_client.KafkaWorker", side_effect=worker_factory):
             first.worker("localhost", consumer=object())
             second.worker("localhost", consumer=object())
-        self.assertNotEqual(worker_groups[0], worker_groups[1])
+        self.assertEqual(worker_groups[0], worker_groups[1])
 
         first_request = first.request_irrigation("WS_001", 20)
         second_request = second.request_irrigation("WS_002", 20)
-        event = envelope("ACTIVATION_DENIED", {"reason": "WS_BUSY"},
+        event = envelope("IRRIGATION_PROGRESS",
+                         {"duration_seconds": 1.0, "accumulated_volume_liters": 0.1,
+                          "flow_rate_lpm": 6.0},
                          operator_id="OP_001", request_id=second_request)
         with mock.patch("WM_FO.kafka_client.show_event") as display:
             first.handle_bytes(json.dumps(event).encode())
             self.assertFalse(first._pending[first_request].is_set())
             self.assertEqual(display.call_count, 0)
             second.handle_bytes(json.dumps(event).encode())
-            self.assertTrue(second._pending[second_request].is_set())
+            self.assertFalse(second._pending[second_request].is_set())
             self.assertEqual(display.call_count, 1)
+
+    def test_restarted_operator_resumes_and_displays_completion_once(self) -> None:
+        publisher = self.Publisher()
+        previous_process = FieldOperator("OP_001", publisher)  # type: ignore[arg-type]
+        request_id = previous_process.request_irrigation("WS_002", 30)
+        progress = envelope(
+            "IRRIGATION_PROGRESS",
+            {"duration_seconds": 14.0, "accumulated_volume_liters": 1.4,
+             "flow_rate_lpm": 6.0},
+            ws_id="WS_002", operator_id="OP_001", request_id=request_id,
+        )
+        previous_process.handle_bytes(encode(progress))
+
+        restarted_process = FieldOperator("OP_001", publisher)  # type: ignore[arg-type]
+        groups = []
+
+        def worker_factory(_bootstrap, group_id, _topics, _handler, _consumer, **kwargs):
+            groups.append(group_id)
+            self.assertEqual(kwargs["auto_offset_reset"], "latest")
+            return object()
+
+        with mock.patch("WM_FO.kafka_client.KafkaWorker", side_effect=worker_factory):
+            restarted_process.worker("localhost", consumer=object())
+
+        completion = envelope(
+            "IRRIGATION_COMPLETED",
+            {"duration_seconds": 30.0, "accumulated_volume_liters": 3.0,
+             "end_reason": "TIME_LIMIT"},
+            ws_id="WS_002", operator_id="OP_001", request_id=request_id,
+        )
+        output = io.StringIO()
+        with redirect_stdout(output):
+            restarted_process.handle_bytes(encode(completion))
+            restarted_process.handle_bytes(encode(completion))  # replay before commit
+
+        self.assertEqual(groups, [previous_process._consumer_group_id])
+        self.assertIn(request_id, output.getvalue())
+        self.assertIn("30.0 s, 3.0 L, reason TIME_LIMIT", output.getvalue())
+        self.assertEqual(output.getvalue().count("Irrigation completed"), 1)
+
+    def test_fresh_operator_starts_at_latest_and_filters_other_operators(self) -> None:
+        operator = FieldOperator("OP_NEW", self.Publisher())  # type: ignore[arg-type]
+        self.assertNotEqual(operator._consumer_group_id,
+                            FieldOperator("OP_001", self.Publisher())._consumer_group_id)  # type: ignore[arg-type]
+        kwargs_seen = {}
+
+        def worker_factory(_bootstrap, group_id, _topics, _handler, _consumer, **kwargs):
+            kwargs_seen.update(group_id=group_id, **kwargs)
+            return object()
+
+        with mock.patch("WM_FO.kafka_client.KafkaWorker", side_effect=worker_factory):
+            operator.worker("localhost", consumer=object())
+        self.assertEqual(kwargs_seen["auto_offset_reset"], "latest")
+
+        old_result = envelope(
+            "IRRIGATION_COMPLETED",
+            {"duration_seconds": 30.0, "accumulated_volume_liters": 3.0,
+             "end_reason": "TIME_LIMIT"},
+            ws_id="WS_002", operator_id="OP_001", request_id="old-request",
+        )
+        with mock.patch("WM_FO.kafka_client.show_event") as display:
+            operator.handle_bytes(encode(old_result))
+        display.assert_not_called()
 
     def test_activation_denied_wakes_matching_request_and_is_displayed(self) -> None:
         operator = FieldOperator("OP_001", self.Publisher())  # type: ignore[arg-type]
@@ -65,9 +130,17 @@ class FieldOperatorKafkaTests(unittest.TestCase):
                              ws_id="WS_001", operator_id="OP_001", request_id=request_id)
         output = io.StringIO()
         with redirect_stdout(output):
+            progress = envelope("IRRIGATION_PROGRESS",
+                                {"duration_seconds": 9, "accumulated_volume_liters": 3.0,
+                                 "flow_rate_lpm": 20.0},
+                                ws_id="WS_001", operator_id="OP_001", request_id=request_id)
+            self.assertTrue(operator.handle_bytes(encode(progress)))
+            self.assertTrue(operator.handle_bytes(encode(completed)))
             self.assertTrue(operator.handle_bytes(encode(completed)))
             self.assertTrue(operator.wait_for_result(request_id, timeout=0.01))
-        self.assertIn("[WS_001] Irrigation completed: 10 s, 3.5 L", output.getvalue())
+        self.assertIn(f"[WS_001] Irrigation completed for request {request_id}: 10 s, 3.5 L", output.getvalue())
+        self.assertEqual(output.getvalue().count("Irrigation completed"), 1)
+        self.assertIn("Irrigation progress", output.getvalue())
 
     def test_poll_worker_signals_ready_only_after_its_first_poll(self) -> None:
         class Worker:

@@ -101,4 +101,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_irrigations_one_live_per_ws
 -- Startup recovery (run by Central on every start, before accepting traffic):
 --   UPDATE irrigations
 --      SET status = 'ENDED', end_reason = 'CENTRAL_RESTART', ended_at = :now
---    WHERE status IN ('AUTHORIZED', 'WATERING');
+--    WHERE status = 'AUTHORIZED';
+-- WATERING rows remain live so retained Engine events can complete them after
+-- Central restarts during an irrigation.

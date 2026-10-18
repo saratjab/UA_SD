@@ -177,13 +177,17 @@ class Database:
             self._conn().executescript(Path(path).read_text(encoding="utf-8"))
 
     def recover_open_irrigations(self) -> int:
-        """Startup recovery: after a restart nothing can still be watering
-        under CENTRAL's control, so close every live irrigation."""
+        """Close authorizations that never reached the Engine at startup.
+
+        Keep WATERING rows live: the Engine can continue a finite irrigation
+        while CENTRAL is restarting, and its retained Kafka completion must be
+        able to finish the same request after the event consumer resumes.
+        """
         now = self._clock()
         with self.transaction() as conn:
             cursor = conn.execute(
                 "UPDATE irrigations SET status = 'ENDED', end_reason = ?, ended_at = ? "
-                f"WHERE status IN {_LIVE_SQL}",
+                "WHERE status = 'AUTHORIZED'",
                 (EndReason.CENTRAL_RESTART.value, now),
             )
         if cursor.rowcount:

@@ -44,7 +44,11 @@ class EngineKafkaService:
             with self._lock:
                 if self._request_id == request_id: return  # replay after a successful start
                 if not self.engine.request_irrigation(operator_id, float(duration)):
-                    reason = "ENGINE_FAILED" if self.engine.failed else "ENGINE_BLOCKED"
+                    reason = (
+                        "ENGINE_FAILED" if self.engine.failed else
+                        "ENGINE_BLOCKED" if self.engine.blocked else
+                        "MONITOR_UNAVAILABLE"
+                    )
                     self._publish("COMMAND_REJECTED", request_id, operator_id, {"reason": reason}); return
                 self._request_id, self._operator_id, self._sequence, self._end_reason = request_id, operator_id, 0, "TIME_LIMIT"
             self._publish("IRRIGATION_STARTED", request_id, operator_id, {})

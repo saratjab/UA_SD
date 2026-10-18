@@ -21,9 +21,14 @@ class EngineKafkaTests(unittest.TestCase):
     def config(self) -> EngineConfig:
         return EngineConfig("WS_001", "localhost", 9092, "localhost", 1, 6, 1, .1, .01)
 
+    def engine(self, controller: IrrigationController | None = None) -> WateringStationEngine:
+        engine = WateringStationEngine(self.config(), controller)
+        engine._monitor_ready.set()  # commands below model a completed HELLO session
+        return engine
+
     def test_dispatches_targeted_start_and_ignores_other_station(self) -> None:
         valve = SolenoidValve()
-        engine = WateringStationEngine(self.config(), IrrigationController("WS_001", valve, FlowMeter(6), .01))
+        engine = self.engine(IrrigationController("WS_001", valve, FlowMeter(6), .01))
         publisher = FakePublisher(); service = EngineKafkaService(engine, publisher)  # type: ignore[arg-type]
         service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": .03}, ws_id="OTHER", operator_id="OP", request_id="other"))
         self.assertFalse(valve.is_open)
@@ -33,14 +38,14 @@ class EngineKafkaTests(unittest.TestCase):
         self.assertIn("IRRIGATION_STARTED", kinds); self.assertIn("IRRIGATION_COMPLETED", kinds)
 
     def test_block_closes_active_valve(self) -> None:
-        valve = SolenoidValve(); engine = WateringStationEngine(self.config(), IrrigationController("WS_001", valve, FlowMeter(6), .1))
+        valve = SolenoidValve(); engine = self.engine(IrrigationController("WS_001", valve, FlowMeter(6), .1))
         service = EngineKafkaService(engine, FakePublisher())  # type: ignore[arg-type]
         service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 1}, ws_id="WS_001", operator_id="OP", request_id="r1"))
         service.handle_command(envelope("BLOCK_WS", {}, ws_id="WS_001"))
         self.assertTrue(engine.irrigation.wait_until_finished(1)); self.assertFalse(valve.is_open); self.assertTrue(engine.blocked)
 
     def test_monitor_disconnect_completion_uses_contract_reason(self) -> None:
-        engine = WateringStationEngine(self.config(), IrrigationController("WS_001", SolenoidValve(), FlowMeter(6), .01))
+        engine = self.engine(IrrigationController("WS_001", SolenoidValve(), FlowMeter(6), .01))
         publisher = FakePublisher()
         service = EngineKafkaService(engine, publisher)  # type: ignore[arg-type]
         service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 1}, ws_id="WS_001", operator_id="OP", request_id="r1"))
@@ -50,7 +55,7 @@ class EngineKafkaTests(unittest.TestCase):
         self.assertEqual(completed[0]["payload"]["end_reason"], "MONITOR_DISCONNECTED")
 
     def test_stop_irrigation_requires_matching_active_request_id(self) -> None:
-        engine = WateringStationEngine(self.config(), IrrigationController("WS_001", SolenoidValve(), FlowMeter(6), .05))
+        engine = self.engine(IrrigationController("WS_001", SolenoidValve(), FlowMeter(6), .05))
         service = EngineKafkaService(engine, FakePublisher())  # type: ignore[arg-type]
         service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 1}, ws_id="WS_001", operator_id="OP", request_id="active"))
         for request_id in ("stale", None):
@@ -62,7 +67,7 @@ class EngineKafkaTests(unittest.TestCase):
         self.assertEqual(engine.irrigation.last_result.stopped_by, "manual")  # type: ignore[union-attr]
 
     def test_stale_stop_after_completion_does_not_affect_next_irrigation(self) -> None:
-        engine = WateringStationEngine(self.config(), IrrigationController("WS_001", SolenoidValve(), FlowMeter(6), .01))
+        engine = self.engine(IrrigationController("WS_001", SolenoidValve(), FlowMeter(6), .01))
         service = EngineKafkaService(engine, FakePublisher())  # type: ignore[arg-type]
         service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": .02}, ws_id="WS_001", operator_id="OP", request_id="old"))
         self.assertTrue(engine.irrigation.wait_until_finished(1))
@@ -83,3 +88,11 @@ class EngineKafkaTests(unittest.TestCase):
                 service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 1}, ws_id="WS_001", operator_id="OP", request_id="r1"))
                 rejected = [m for _, m in publisher.records if m["event_type"] == "COMMAND_REJECTED"]
                 self.assertEqual(rejected[0]["payload"]["reason"], expected)
+
+    def test_start_is_rejected_while_monitor_is_unavailable(self) -> None:
+        engine = WateringStationEngine(self.config())
+        publisher = FakePublisher()
+        service = EngineKafkaService(engine, publisher)  # type: ignore[arg-type]
+        service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 1}, ws_id="WS_001", operator_id="OP", request_id="r1"))
+        rejected = [message for _, message in publisher.records if message["event_type"] == "COMMAND_REJECTED"]
+        self.assertEqual(rejected[0]["payload"]["reason"], "MONITOR_UNAVAILABLE")
