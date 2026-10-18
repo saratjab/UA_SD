@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import json
+import io
+import threading
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
-from common.kafka_contract import envelope
+from common.kafka_contract import encode, envelope
 from WM_FO.kafka_client import FieldOperator
+from WM_FO.main import _poll_worker
 
 
 class FieldOperatorKafkaTests(unittest.TestCase):
-    def test_same_operator_processes_use_independent_groups_and_route_by_request(self) -> None:
-        class Publisher:
-            def publish(self, *_args, **_kwargs):
-                pass
+    class Publisher:
+        def publish(self, *_args, **_kwargs):
+            pass
 
-        publisher = Publisher()
+    def test_same_operator_processes_use_independent_groups_and_route_by_request(self) -> None:
+        publisher = self.Publisher()
         first = FieldOperator("OP_001", publisher)  # type: ignore[arg-type]
         second = FieldOperator("OP_001", publisher)  # type: ignore[arg-type]
         worker_groups = []
@@ -40,6 +44,53 @@ class FieldOperatorKafkaTests(unittest.TestCase):
             second.handle_bytes(json.dumps(event).encode())
             self.assertTrue(second._pending[second_request].is_set())
             self.assertEqual(display.call_count, 1)
+
+    def test_activation_denied_wakes_matching_request_and_is_displayed(self) -> None:
+        operator = FieldOperator("OP_001", self.Publisher())  # type: ignore[arg-type]
+        request_id = operator.request_irrigation("WS_001", 10)
+        denial = envelope("ACTIVATION_DENIED", {"reason": "WS_OUT_OF_SERVICE"},
+                          ws_id="WS_001", operator_id="OP_001", request_id=request_id)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertTrue(operator.handle_bytes(encode(denial)))
+            self.assertTrue(operator.wait_for_result(request_id, timeout=0.01))
+        self.assertIn("[WS_001] Irrigation denied: WS_OUT_OF_SERVICE.", output.getvalue())
+
+    def test_irrigation_completed_remains_a_terminal_result(self) -> None:
+        operator = FieldOperator("OP_001", self.Publisher())  # type: ignore[arg-type]
+        request_id = operator.request_irrigation("WS_001", 10)
+        completed = envelope("IRRIGATION_COMPLETED",
+                             {"duration_seconds": 10, "accumulated_volume_liters": 3.5,
+                              "end_reason": "COMPLETED"},
+                             ws_id="WS_001", operator_id="OP_001", request_id=request_id)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertTrue(operator.handle_bytes(encode(completed)))
+            self.assertTrue(operator.wait_for_result(request_id, timeout=0.01))
+        self.assertIn("[WS_001] Irrigation completed: 10 s, 3.5 L", output.getvalue())
+
+    def test_poll_worker_signals_ready_only_after_its_first_poll(self) -> None:
+        class Worker:
+            def __init__(self):
+                self.first_poll = threading.Event()
+                self.calls = 0
+
+            def poll_once(self, _timeout):
+                self.calls += 1
+                if self.calls == 1:
+                    self.first_poll.set()
+                else:
+                    raise RuntimeError("stop test thread")
+
+        worker = Worker()
+        ready, failed = threading.Event(), threading.Event()
+        with mock.patch("WM_FO.main.LOGGER.exception"):
+            thread = threading.Thread(target=_poll_worker, args=(worker, ready, failed), daemon=True)
+            thread.start()
+            self.assertTrue(ready.wait(timeout=1))
+            thread.join(timeout=1)
+        self.assertTrue(worker.first_poll.is_set())
+        self.assertTrue(failed.is_set())
 
 
 if __name__ == "__main__":

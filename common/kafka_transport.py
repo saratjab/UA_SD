@@ -10,10 +10,15 @@ from .kafka_contract import encode
 LOGGER = logging.getLogger(__name__)
 
 try:  # The rest of the application remains usable without a broker dependency.
-    from confluent_kafka import Consumer, Producer, KafkaException  # type: ignore
+    from confluent_kafka import Consumer, Producer, KafkaException, TopicPartition  # type: ignore
 except ImportError:  # pragma: no cover - exercised when dependency missing
     Consumer = Producer = None  # type: ignore
     KafkaException = Exception
+
+    class TopicPartition:  # type: ignore[no-redef]
+        """Small test-time stand-in; production uses confluent-kafka's class."""
+        def __init__(self, topic: str, partition: int, offset: int = -1001) -> None:
+            self.topic, self.partition, self.offset = topic, partition, offset
 
 
 class KafkaUnavailable(RuntimeError):
@@ -56,6 +61,7 @@ class KafkaWorker:
             consumer = Consumer({"bootstrap.servers": bootstrap_servers, "group.id": group_id,
                                  "enable.auto.commit": False, "auto.offset.reset": auto_offset_reset})
         self._consumer, self._topics, self._handler = consumer, topics, handler
+        self._auto_offset_reset = auto_offset_reset
         self._running = False
 
     def start(self) -> None:
@@ -63,13 +69,44 @@ class KafkaWorker:
         self._running = True
 
     def wait_until_assigned(self, timeout: float = 10.0) -> bool:
-        """Poll until Kafka assigns this consumer's subscribed partitions."""
+        """Wait for assignment and explicitly establish a latest start offset.
+
+        ``position()`` reports the last consumed offset + 1 and can remain
+        OFFSET_INVALID on an idle partition. For FO's fresh latest group, use
+        the broker high watermark and seek there instead of mistaking assignment
+        for completed offset resolution.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self._consumer.assignment():
+            assignment = self._consumer.assignment()
+            if assignment:
+                if self._auto_offset_reset != "latest":
+                    return True
+                try:
+                    positions = self._consumer.position(assignment)
+                    if len(positions) == len(assignment) and all(p.offset >= 0 for p in positions):
+                        return True
+                    remaining = max(0.0, deadline - time.monotonic())
+                    committed = self._consumer.committed(assignment, timeout=remaining)
+                    if committed is None or len(committed) != len(assignment):
+                        return False
+                    for partition, stored in zip(assignment, committed):
+                        if stored.offset >= 0:
+                            start_offset = stored.offset
+                        else:
+                            watermarks = self._consumer.get_watermark_offsets(
+                                partition, timeout=max(0.0, deadline - time.monotonic()))
+                            if watermarks is None or len(watermarks) != 2 or watermarks[1] < 0:
+                                return False
+                            start_offset = watermarks[1]
+                        self._consumer.seek(TopicPartition(
+                            partition.topic, partition.partition, start_offset))
+                except Exception:
+                    LOGGER.exception("Could not establish Field Operator Kafka start offsets")
+                    return False
                 return True
             self.poll_once(min(0.1, max(0.0, deadline - time.monotonic())))
-        return bool(self._consumer.assignment())
+        return False
 
     def poll_once(self, timeout: float = 1.0) -> bool:
         msg = self._consumer.poll(timeout)
