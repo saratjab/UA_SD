@@ -1,0 +1,18 @@
+# Overlay for the assignment's lab PCs. Central, its database, and Kafka run
+# on Railway; lab machines run only Field Operators or Watering Stations.
+services:
+  kafka:
+    profiles: [railway-disabled]
+
+  kafka-init:
+    profiles: [railway-disabled]
+
+  central:
+    profiles: [railway-disabled]
+    depends_on: !reset []
+
+  ws1-monitor:
+    depends_on: !reset []
+
+  ws2-monitor:
+    depends_on: !reset []

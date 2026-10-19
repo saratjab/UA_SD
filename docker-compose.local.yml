@@ -70,9 +70,9 @@ services:
       - --socket-port
       - "${CENTRAL_SOCKET_PORT:-5000}"
       - --kafka-host
-      - kafka
+      - "${KAFKA_HOST:-kafka}"
       - --kafka-port
-      - "29092"
+      - "${KAFKA_PORT:-29092}"
       - --db-path
       - "${DB_PATH:-/data/wm_central.db}"
       - --seed-dev
@@ -109,9 +109,9 @@ services:
       - --location
       - "${WS1_LOCATION:-North Garden}"
       - --central-host
-      - central
+      - "${CENTRAL_HOST:-central}"
       - --central-port
-      - "${CENTRAL_SOCKET_PORT:-5000}"
+      - "${CENTRAL_PORT:-${CENTRAL_SOCKET_PORT:-5000}}"
       - --engine-host
       - 0.0.0.0
       - --engine-port
@@ -131,16 +131,14 @@ services:
       - --ws-id
       - "${WS1_ID:-WS_001}"
       - --kafka-host
-      - kafka
+      - "${KAFKA_HOST:-kafka}"
       - --kafka-port
-      - "29092"
+      - "${KAFKA_PORT:-29092}"
       - --monitor-host
       - ws1-monitor
       - --monitor-port
       - "${WS1_ENGINE_PORT:-6001}"
     depends_on:
-      kafka-init:
-        condition: service_completed_successfully
       ws1-monitor:
         condition: service_started
 
@@ -155,9 +153,9 @@ services:
       - --location
       - "${WS2_LOCATION:-South Garden}"
       - --central-host
-      - central
+      - "${CENTRAL_HOST:-central}"
       - --central-port
-      - "${CENTRAL_SOCKET_PORT:-5000}"
+      - "${CENTRAL_PORT:-${CENTRAL_SOCKET_PORT:-5000}}"
       - --engine-host
       - 0.0.0.0
       - --engine-port
@@ -177,16 +175,14 @@ services:
       - --ws-id
       - "${WS2_ID:-WS_002}"
       - --kafka-host
-      - kafka
+      - "${KAFKA_HOST:-kafka}"
       - --kafka-port
-      - "29092"
+      - "${KAFKA_PORT:-29092}"
       - --monitor-host
       - ws2-monitor
       - --monitor-port
       - "${WS2_ENGINE_PORT:-6002}"
     depends_on:
-      kafka-init:
-        condition: service_completed_successfully
       ws2-monitor:
         condition: service_started
 
@@ -196,17 +192,11 @@ services:
     entrypoint: [python, -m, WM_FO.main]
     command:
       - --kafka-host
-      - kafka
+      - "${KAFKA_HOST:-kafka}"
       - --kafka-port
-      - "29092"
+      - "${KAFKA_PORT:-29092}"
       - --operator-id
       - "${FO_OPERATOR_ID:-OP_001}"
-    depends_on:
-      kafka-init:
-        condition: service_completed_successfully
-      central:
-        condition: service_healthy
-
 volumes:
   central-data:
   kafka-data:

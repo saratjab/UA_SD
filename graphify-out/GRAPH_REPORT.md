@@ -1,17 +1,17 @@
-# Graph Report - UA_SD  (2026-10-12)
+# Graph Report - UA_SD  (2026-10-18)
 
 ## Corpus Check
-- 62 files · ~23,624 words
+- 70 files · ~33,737 words
 - Verdict: corpus is large enough that graph structure adds value.
-- Unclassified: 1 file(s) not represented in the graph (top: (none) 1)
+- Unclassified: 3 file(s) not represented in the graph (top: (none) 3)
 
 ## Summary
-- 779 nodes · 1942 edges · 58 communities (33 shown, 25 thin omitted)
-- Extraction: 86% EXTRACTED · 14% INFERRED · 0% AMBIGUOUS · INFERRED: 271 edges (avg confidence: 0.89)
+- 967 nodes · 2475 edges · 61 communities (35 shown, 26 thin omitted)
+- Extraction: 84% EXTRACTED · 16% INFERRED · 0% AMBIGUOUS · INFERRED: 390 edges (avg confidence: 0.88)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `4a1ab5d6`
+- Built from commit: `271364e8`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -21,41 +21,42 @@
 - StateManagerTests
 - test_socket_server.py
 - protocol.py
-- state_manager.py
+- database.py
 - CentralSocketServer
 - Database
 - CentralClient
 - Project handoff: WaterManagement
 - IrrigationTests
-- unittest
+- common/__init__.py
 - StateManager
-- .perform_health_check
-- EngineKafkaService
+- MonitorTests
+- envelope
 - _irrigation
 - SocketTests
 - WM_FO/main.py
 - Effective Status Function
-- database.py
+- .register_station
 - EngineServer
 - StationTests
 - Graphify Workflow
-- ADR-001: WM_Central State Model and SQLite Schema
-- Ahmad Bassam Oqaili
-- Sarat Mu'taz Jaabari
+- test_wm_ws_integration.py
+- DatabaseTestCase
+- execute_control_line
 - WaterManagement_Project_Plan_Complete.md
 - FramingTests
 - ProtocolTests
 - FakeCentralClient
 - MessageFactoryTests
-- WaterManagement Kafka message contract
-- kafka-irrigation-lifecycle.md
+- WaterManagement Release 1 — implementation and verification report
+- .block_station
+- WM_Central/config.py
 - logging
 - 33. Testing Strategy
 - 37. Development Timeline
 - 21. CENTRAL Internal Responsibilities
-- monitoring.py
+- WM_Central/main.py
 - 19. Kafka Event Examples
-- 18. Kafka / Event-Streaming Design
+- KafkaWorker
 - 4. Required Components
 - 15. CENTRAL Commands
 - 17. Socket Communication Design
@@ -65,32 +66,35 @@
 - 3. Source-of-Truth Rules
 - 5. Official Conceptual Architecture
 - 6. Why Both Sockets and Kafka Exist
-- FakePublisher
+- Operator
 - 7. Complete System Flow
+- FakeClock
+- EffectiveStatusTests
+- utc_now
 
 ## God Nodes (most connected - your core abstractions)
-1. `Database` - 56 edges
-2. `WateringStationEngine` - 49 edges
-3. `StateManager` - 43 edges
-4. `IrrigationController` - 36 edges
-5. `FlowMeter` - 33 edges
-6. `CentralKafkaService` - 31 edges
-7. `SolenoidValve` - 30 edges
-8. `StateManagerTests` - 26 edges
-9. `CentralSocketServer` - 25 edges
-10. `CentralClient` - 23 edges
+1. `Database` - 62 edges
+2. `StateManager` - 54 edges
+3. `WateringStationEngine` - 54 edges
+4. `IrrigationController` - 43 edges
+5. `envelope()` - 43 edges
+6. `FlowMeter` - 39 edges
+7. `CentralKafkaService` - 36 edges
+8. `SolenoidValve` - 36 edges
+9. `EngineKafkaService` - 29 edges
+10. `KafkaWorker` - 28 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `RealKafkaLifecycleTests` --uses--> `Database`  [INFERRED]
-  tests/test_kafka_real_integration.py → WM_Central/database.py
+- `Central service` --references--> `main()`  [INFERRED]
+  docs/railway-deployment.md → WM_Central/main.py
 - `WMWSIntegrationTests` --uses--> `Database`  [INFERRED]
   tests/test_wm_ws_integration.py → WM_Central/database.py
-- `CentralKafkaService` --uses--> `MessageValidationError`  [INFERRED]
-  WM_Central/kafka_service.py → common/kafka_contract.py
+- `RealKafkaLifecycleTests` --uses--> `CentralKafkaService`  [INFERRED]
+  tests/test_kafka_real_integration.py → WM_Central/kafka_service.py
+- `CentralKafkaService` --uses--> `KafkaPublisher`  [INFERRED]
+  WM_Central/kafka_service.py → common/kafka_transport.py
 - `CentralKafkaService` --uses--> `KafkaWorker`  [INFERRED]
   WM_Central/kafka_service.py → common/kafka_transport.py
-- `main()` --uses--> `KafkaUnavailable`  [INFERRED]
-  WM_Central/main.py → common/kafka_transport.py
 
 ## Import Cycles
 - None detected.
@@ -99,35 +103,31 @@
 - **WM_Central State Model** — docs_adr_adr_001_state_model_and_schema_durable_dimensions, docs_adr_adr_001_state_model_and_schema_effective_status, docs_adr_adr_001_state_model_and_schema_status_precedence, docs_adr_adr_001_state_model_and_schema_state_manager [EXTRACTED 1.00]
 - **SQLite Data Integrity Model** — docs_adr_adr_001_state_model_and_schema_database_invariants, docs_adr_adr_001_state_model_and_schema_request_audit, docs_adr_adr_001_state_model_and_schema_end_reason_model [INFERRED 0.85]
 
-## Communities (58 total, 25 thin omitted)
+## Communities (61 total, 26 thin omitted)
 
 ### Community 0 - "WateringStationMonitor"
-Cohesion: 0.24
+Cohesion: 0.18
 Nodes (7): build_parser(), MonitorConfig, parse_args(), configure_logging(), main(), utc_timestamp(), WateringStationMonitor
 
 ### Community 1 - "WateringStationEngine"
-Cohesion: 0.08
-Nodes (16): EngineKafkaTests, FakePublisher, wait_until(), WMWSIntegrationTests, engine_config(), EngineTests, monitor(), IrrigationTests (+8 more)
-
-### Community 2 - "StateManagerTests"
-Cohesion: 0.11
-Nodes (4): CommandOutcome, DisconnectOutcome, FaultOutcome, StateManagerTests
+Cohesion: 0.07
+Nodes (16): EngineKafkaTests, FakePublisher, engine_config(), EngineTests, monitor(), IrrigationTests, EngineConfig, WateringStationEngine (+8 more)
 
 ### Community 3 - "test_socket_server.py"
-Cohesion: 0.09
-Nodes (11): DatabaseTestCase, wait_until(), FaultTests, OperatorTests, SchemaTests, BadInputTests, DisconnectTests, FaultTests (+3 more)
+Cohesion: 0.16
+Nodes (7): wait_until(), BadInputTests, DisconnectTests, FaultTests, ManyStationsTests, RegistrationTests, SocketServerTestCase
 
 ### Community 4 - "protocol.py"
 Cohesion: 0.10
 Nodes (15): calculate_lrc(), ConnectionClosedError, create_frame(), fault_resolved_message(), health_check_message(), InvalidLRCError, MalformedFrameError, parse_frame() (+7 more)
 
-### Community 5 - "state_manager.py"
-Cohesion: 0.23
-Nodes (7): AdminState, DenyReason, EndReason, IrrigationStatus, StationStatus, effective_status(), EffectiveStatusTests
+### Community 5 - "database.py"
+Cohesion: 0.24
+Nodes (6): AdminState, DenyReason, EndReason, IrrigationStatus, StationStatus, effective_status()
 
 ### Community 6 - "CentralSocketServer"
-Cohesion: 0.15
-Nodes (3): CentralSocketServer, _enable_keepalive(), MonitorConnection
+Cohesion: 0.13
+Nodes (4): WMWSIntegrationTests, CentralSocketServer, _enable_keepalive(), MonitorConnection
 
 ### Community 8 - "CentralClient"
 Cohesion: 0.15
@@ -138,40 +138,52 @@ Cohesion: 0.29
 Nodes (6): Behavioral constraints, Core architecture, Current implementation boundaries, Project handoff: WaterManagement, Suggested first pass for a new Codex, Tests
 
 ### Community 12 - "StateManager"
-Cohesion: 0.15
-Nodes (8): KafkaPublisher, RealKafkaLifecycleTests, CentralKafkaService, configure_logging(), main(), _poll_worker(), RegisterOutcome, StateManager
+Cohesion: 0.11
+Nodes (4): RegisterOutcome, StateManager, Publisher, FakePublisher
 
-### Community 14 - "EngineKafkaService"
+### Community 14 - "envelope"
 Cohesion: 0.09
-Nodes (13): decode(), encode(), envelope(), MessageValidationError, utc_timestamp(), validate(), KafkaContractTests, LatestTelemetry (+5 more)
+Nodes (16): decode(), encode(), envelope(), MessageValidationError, utc_timestamp(), validate(), KafkaContractTests, FieldOperatorKafkaTests (+8 more)
 
 ### Community 15 - "_irrigation"
-Cohesion: 0.18
-Nodes (6): _fault(), _irrigation(), _operator(), Fault, IrrigationRecord, Operator
+Cohesion: 0.19
+Nodes (4): _fault(), _irrigation(), Fault, IrrigationRecord
 
 ### Community 17 - "WM_FO/main.py"
-Cohesion: 0.08
-Nodes (16): KafkaUnavailable, KafkaWorker, build_parser(), CentralConfig, parse_args(), build_parser(), FieldOperatorConfig, parse_args() (+8 more)
+Cohesion: 0.05
+Nodes (21): KafkaPublisher, KafkaUnavailable, FieldOperatorInteractiveTests, start(), close_worker(), enter_q(), poll_once(), start() (+13 more)
 
 ### Community 18 - "Effective Status Function"
 Cohesion: 0.29
 Nodes (5): Effective Status Function, Fault Resolution Message, Single Station Status Column, State Manager, Displayed Status Precedence
 
-### Community 19 - "database.py"
-Cohesion: 0.14
-Nodes (4): _station(), utc_now(), Station, FakeClock
+### Community 19 - ".register_station"
+Cohesion: 0.32
+Nodes (3): _station(), RegistrationResult, Station
+
+### Community 29 - "DatabaseTestCase"
+Cohesion: 0.12
+Nodes (4): DatabaseTestCase, FaultTests, OperatorTests, SchemaTests
+
+### Community 30 - "execute_control_line"
+Cohesion: 0.19
+Nodes (4): execute_control_line(), select_station_ids(), DisconnectOutcome, ControlAndMonitoringTests
 
 ### Community 31 - "WaterManagement_Project_Plan_Complete.md"
 Cohesion: 0.06
 Nodes (30): 10. Operator Irrigation Request Flow, 11. Authorization and Start-Irrigation Flow, 12. Irrigation Telemetry Flow, 13. Irrigation Completion Flow, 16. Watering Station States, 1. Project Identity, 22. WM_WS_M Internal Structure, 23. WM_WS_E Internal Structure (+22 more)
 
-### Community 36 - "WaterManagement Kafka message contract"
-Cohesion: 0.50
-Nodes (3): FO request and response interface, Local development, WaterManagement Kafka message contract
+### Community 36 - "WaterManagement Release 1 — implementation and verification report"
+Cohesion: 0.07
+Nodes (28): ADR-001: WM_Central State Model and SQLite Schema, Assignment minimum: Railway and two lab PCs, Docker deployment, Endpoint variables, Local Docker mode, Central service, Central socket TCP Proxy, Deploy and validate (+20 more)
+
+### Community 38 - "WM_Central/config.py"
+Cohesion: 0.47
+Nodes (3): build_parser(), CentralConfig, parse_args()
 
 ### Community 39 - "logging"
-Cohesion: 0.28
-Nodes (5): parse_args(), configure_logging(), main(), _poll_worker(), start_command_thread()
+Cohesion: 0.16
+Nodes (6): build_parser(), parse_args(), configure_logging(), main(), _poll_worker(), start_command_thread()
 
 ### Community 40 - "33. Testing Strategy"
 Cohesion: 0.18
@@ -185,17 +197,17 @@ Nodes (9): 19–22 October, 23–24 October, 25 October, 37. Development Timelin
 Cohesion: 0.22
 Nodes (9): 21. CENTRAL Internal Responsibilities, `authorization.py`, `database.py`, `irrigation_service.py`, `kafka_client.py`, `monitoring.py`, `protocol.py`, `socket_server.py` (+1 more)
 
-### Community 43 - "monitoring.py"
-Cohesion: 0.38
-Nodes (3): StationView, format_station_table(), log_station_table()
+### Community 43 - "WM_Central/main.py"
+Cohesion: 0.20
+Nodes (8): configure_logging(), main(), _poll_worker(), StationView, control_loop(), format_station_table(), log_station_table(), monitor_loop()
 
 ### Community 44 - "19. Kafka Event Examples"
 Cohesion: 0.33
 Nodes (6): 19.1 Operator request, 19.2 Central authorization, 19.3 Start command, 19.4 Telemetry, 19.5 Completion, 19. Kafka Event Examples
 
-### Community 45 - "18. Kafka / Event-Streaming Design"
-Cohesion: 0.40
-Nodes (5): 18.1 Recommended topics, 18.2 Recommended event envelope, 18.3 Kafka keys, 18.4 Consumer-group rule, 18. Kafka / Event-Streaming Design
+### Community 45 - "KafkaWorker"
+Cohesion: 0.05
+Nodes (15): KafkaWorker, TopicPartition, FO request and response interface, Local development, WaterManagement Kafka message contract, OneMessage, OneMessageConsumer, FakeConsumer (+7 more)
 
 ### Community 46 - "4. Required Components"
 Cohesion: 0.40
@@ -234,24 +246,24 @@ Cohesion: 0.67
 Nodes (3): 6. Why Both Sockets and Kafka Exist, Kafka path, Socket path
 
 ## Knowledge Gaps
-- **104 isolated node(s):** `Core architecture`, `Behavioral constraints`, `Current implementation boundaries`, `Tests`, `Suggested first pass for a new Codex` (+99 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 288 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **25 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **120 isolated node(s):** `Core architecture`, `Behavioral constraints`, `Current implementation boundaries`, `Tests`, `Suggested first pass for a new Codex` (+115 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 353 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **26 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Database` connect `Database` to `WateringStationEngine`, `test_socket_server.py`, `state_manager.py`, `StateManager`, `_irrigation`, `database.py`?**
-  _High betweenness centrality (0.094) - this node is a cross-community bridge._
-- **Are the 14 inferred relationships involving `Database` (e.g. with `RealKafkaLifecycleTests` and `WMWSIntegrationTests`) actually correct?**
-  _`Database` has 14 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `18. Kafka / Event-Streaming Design` connect `KafkaWorker` to `WaterManagement_Project_Plan_Complete.md`?**
+  _High betweenness centrality (0.185) - this node is a cross-community bridge._
+- **Are the 15 inferred relationships involving `Database` (e.g. with `RealKafkaLifecycleTests` and `WMWSIntegrationTests`) actually correct?**
+  _`Database` has 15 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `Core architecture`, `Behavioral constraints`, `Current implementation boundaries` to the rest of the system?**
-  _104 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _120 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `WateringStationEngine` be split into smaller, more focused modules?**
-  _Cohesion score 0.07597007947639084 - nodes in this community are weakly interconnected._
-- **Why does `StateManager` connect `StateManager` to `WateringStationEngine`, `StateManagerTests`, `test_socket_server.py`, `state_manager.py`, `CentralSocketServer`, `logging`, `Database`, `monitoring.py`, `EngineKafkaService`?**
-  _High betweenness centrality (0.088) - this node is a cross-community bridge._
-- **Are the 11 inferred relationships involving `WateringStationEngine` (e.g. with `EngineKafkaTests` and `RealKafkaLifecycleTests`) actually correct?**
-  _`WateringStationEngine` has 11 INFERRED edges - model-reasoned connections that need verification._
-- **Should `StateManagerTests` be split into smaller, more focused modules?**
-  _Cohesion score 0.11097560975609756 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06529602132114982 - nodes in this community are weakly interconnected._
+- **Why does `StateManager` connect `StateManager` to `WateringStationEngine`, `StateManagerTests`, `test_socket_server.py`, `database.py`, `CentralSocketServer`, `Database`, `logging`, `.block_station`, `WM_Central/main.py`, `envelope`, `WM_FO/main.py`, `test_wm_ws_integration.py`, `execute_control_line`?**
+  _High betweenness centrality (0.122) - this node is a cross-community bridge._
+- **Are the 18 inferred relationships involving `StateManager` (e.g. with `RealKafkaLifecycleTests` and `WMWSIntegrationTests`) actually correct?**
+  _`StateManager` has 18 INFERRED edges - model-reasoned connections that need verification._
+- **Should `protocol.py` be split into smaller, more focused modules?**
+  _Cohesion score 0.0962566844919786 - nodes in this community are weakly interconnected._
