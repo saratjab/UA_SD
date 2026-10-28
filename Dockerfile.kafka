@@ -10,8 +10,9 @@ FROM apache/kafka:3.8.0
 
 COPY config/kafka/server.railway.properties /mnt/shared/config/server.properties
 COPY scripts/kafka-railway-entrypoint.sh /opt/wm/kafka-railway-entrypoint.sh
+COPY scripts/kafka-railway-listeners.sh /opt/wm/kafka-railway-listeners.sh
 COPY --from=cert-verifier-build /classes/VerifyKafkaCertificate.class /opt/wm/VerifyKafkaCertificate.class
 USER root
-RUN chmod 0755 /opt/wm/kafka-railway-entrypoint.sh
+RUN chmod 0755 /opt/wm/kafka-railway-entrypoint.sh /opt/wm/kafka-railway-listeners.sh
 USER appuser
 CMD ["/opt/wm/kafka-railway-entrypoint.sh"]

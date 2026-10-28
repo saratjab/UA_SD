@@ -5,12 +5,10 @@ umask 077
 
 fail() { echo "Kafka startup configuration error: $1" >&2; exit 78; }
 required() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
-valid_host() { [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ && "$1" != *..* ]]; }
 
 for name in KAFKA_PRIVATE_HOST KAFKA_SASL_USERNAME KAFKA_SASL_PASSWORD KAFKA_TLS_KEYSTORE_B64 \
             KAFKA_TLS_KEYSTORE_PASSWORD KAFKA_TLS_CA_CERT_B64; do required "$name"; done
 
-valid_host "$KAFKA_PRIVATE_HOST" || fail "KAFKA_PRIVATE_HOST must be a DNS hostname"
 [[ "$KAFKA_SASL_USERNAME" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || fail "KAFKA_SASL_USERNAME contains unsupported characters"
 (( ${#KAFKA_SASL_PASSWORD} >= 32 && ${#KAFKA_SASL_PASSWORD} <= 256 )) && [[ "$KAFKA_SASL_PASSWORD" =~ ^[A-Za-z0-9_.+]+$ ]] || fail "KAFKA_SASL_PASSWORD must be 32-256 URL-safe characters"
 [[ ${#KAFKA_TLS_KEYSTORE_PASSWORD} -ge 12 && "$KAFKA_TLS_KEYSTORE_PASSWORD" != *$'\n'* ]] || fail "KAFKA_TLS_KEYSTORE_PASSWORD must be at least 12 characters"
@@ -18,34 +16,13 @@ valid_host "$KAFKA_PRIVATE_HOST" || fail "KAFKA_PRIVATE_HOST must be a DNS hostn
 [[ "${KAFKA_SASL_MECHANISM:-PLAIN}" == "PLAIN" ]] || fail "Kafka 3.8 single-node configuration supports only the configured PLAIN mechanism here"
 external_enabled="${KAFKA_PUBLIC_LISTENER_ENABLED:-false}"
 [[ "$external_enabled" == "true" || "$external_enabled" == "false" ]] || fail "KAFKA_PUBLIC_LISTENER_ENABLED must be true or false"
-if [[ "$external_enabled" == "true" ]]; then
-    required KAFKA_PUBLIC_HOST
-    required KAFKA_PUBLIC_PORT
-    valid_host "$KAFKA_PUBLIC_HOST" || fail "KAFKA_PUBLIC_HOST must be a DNS hostname"
-    [[ "$KAFKA_PUBLIC_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && (( KAFKA_PUBLIC_PORT <= 65535 )) || fail "KAFKA_PUBLIC_PORT must be a valid TCP port"
-    expected_listeners='INTERNAL://:29092,HOST://:9092,CONTROLLER://127.0.0.1:9093'
-    expected_protocols='INTERNAL:SASL_SSL,HOST:SASL_SSL,CONTROLLER:PLAINTEXT'
+if [[ -r /opt/wm/kafka-railway-listeners.sh ]]; then
+    source /opt/wm/kafka-railway-listeners.sh
 else
-    [[ -z "${KAFKA_PUBLIC_HOST:-}${KAFKA_PUBLIC_PORT:-}" ]] || fail "public Kafka endpoints require KAFKA_PUBLIC_LISTENER_ENABLED=true"
-    expected_listeners='INTERNAL://:29092,CONTROLLER://127.0.0.1:9093'
-    expected_protocols='INTERNAL:SASL_SSL,CONTROLLER:PLAINTEXT'
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "$script_dir/kafka-railway-listeners.sh"
 fi
-[[ "${KAFKA_LISTENERS:-$expected_listeners}" == "$expected_listeners" ]] || fail "KAFKA_LISTENERS does not match the enabled secure listener set"
-[[ "${KAFKA_LISTENER_SECURITY_PROTOCOL_MAP:-$expected_protocols}" == "$expected_protocols" ]] || fail "All enabled client listeners must use SASL_SSL"
-
-export KAFKA_LISTENERS="$expected_listeners"
-export KAFKA_LISTENER_SECURITY_PROTOCOL_MAP="$expected_protocols"
-export KAFKA_ADVERTISED_LISTENERS="INTERNAL://${KAFKA_PRIVATE_HOST}:29092"
-if [[ "$external_enabled" == "true" ]]; then
-    export KAFKA_ADVERTISED_LISTENERS+=",HOST://${KAFKA_PUBLIC_HOST}:${KAFKA_PUBLIC_PORT}"
-fi
-export KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
-export KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
-export KAFKA_CONTROLLER_QUORUM_VOTERS='1@localhost:9093'
-export KAFKA_SASL_ENABLED_MECHANISMS=PLAIN
-export KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL=PLAIN
 export KAFKA_SSL_CLIENT_AUTH=none
-export KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM=https
 
 security_dir="$(mktemp -d /tmp/wm-kafka-security.XXXXXX)"
 trap 'rm -rf "$security_dir"' EXIT

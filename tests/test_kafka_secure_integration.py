@@ -90,6 +90,10 @@ class SecureKafkaIntegrationTests(unittest.TestCase):
                         time.sleep(.5)
                 else:
                     self.fail(f"secure Kafka did not become ready: {last_error}")
+                startup_log = log.read_text(errors="replace")
+                self.assertIn("Awaiting socket connections on 127.0.0.1:9093", startup_log)
+                self.assertIn("Awaiting socket connections on 0.0.0.0:29092", startup_log)
+                self.assertIn("Awaiting socket connections on 0.0.0.0:9092", startup_log)
 
                 topic = f"wm.secure.integration.{uuid4().hex}"
                 admin.create_topics([NewTopic(topic, 3, 1)])[topic].result(timeout=10)

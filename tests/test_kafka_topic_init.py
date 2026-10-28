@@ -8,6 +8,7 @@ import unittest
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "kafka-init-topics.sh"
+RAILWAY_LISTENERS = Path(__file__).resolve().parents[1] / "scripts" / "kafka-railway-listeners.sh"
 TOPICS = ("wm.activation.requests", "wm.ws.commands", "wm.ws.events", "wm.operator.events")
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -123,6 +124,7 @@ class KafkaTopicInitTests(unittest.TestCase):
         self.assertIn("COPY config/kafka/server.railway.properties /mnt/shared/config/server.properties", dockerfile)
         self.assertIn("RUN javac -d /classes /src/VerifyKafkaCertificate.java", dockerfile)
         self.assertIn("COPY --from=cert-verifier-build /classes/VerifyKafkaCertificate.class", dockerfile)
+        self.assertIn("COPY scripts/kafka-railway-listeners.sh /opt/wm/kafka-railway-listeners.sh", dockerfile)
         self.assertIn("SASL_SSL", template)
         self.assertIn("SASL_SSL", railway)
         self.assertIn("KAFKA_PUBLIC_HOST", template)
@@ -145,6 +147,53 @@ class KafkaTopicInitTests(unittest.TestCase):
         self.assertIn("KAFKA_NUM_PARTITIONS=3", template)
         self.assertIn("KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093", template)
 
+    def test_public_railway_listener_configuration_has_all_three_bindings_and_secure_advertisements(self) -> None:
+        environment = os.environ | {
+            "KAFKA_PRIVATE_HOST": "wm-kafka.railway.internal",
+            "KAFKA_PUBLIC_HOST": "tcp.example.test",
+            "KAFKA_PUBLIC_PORT": "45678",
+            "KAFKA_PUBLIC_LISTENER_ENABLED": "true",
+        }
+        result = subprocess.run(["bash", str(RAILWAY_LISTENERS)], env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = dict(line.split("=", 1) for line in result.stdout.splitlines())
+        self.assertEqual(generated["KAFKA_LISTENERS"],
+                         "INTERNAL://0.0.0.0:29092,HOST://0.0.0.0:9092,CONTROLLER://127.0.0.1:9093")
+        self.assertEqual(generated["KAFKA_ADVERTISED_LISTENERS"],
+                         "INTERNAL://wm-kafka.railway.internal:29092,HOST://tcp.example.test:45678")
+        self.assertEqual(generated["KAFKA_LISTENER_SECURITY_PROTOCOL_MAP"],
+                         "INTERNAL:SASL_SSL,HOST:SASL_SSL,CONTROLLER:PLAINTEXT")
+        self.assertNotIn("CONTROLLER", generated["KAFKA_ADVERTISED_LISTENERS"])
+
+    def test_private_only_railway_listener_configuration_keeps_internal_and_controller(self) -> None:
+        result = subprocess.run(["bash", str(RAILWAY_LISTENERS)], env=os.environ | {
+            "KAFKA_PRIVATE_HOST": "wm-kafka.railway.internal", "KAFKA_PUBLIC_LISTENER_ENABLED": "false",
+        }, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = dict(line.split("=", 1) for line in result.stdout.splitlines())
+        self.assertEqual(generated["KAFKA_LISTENERS"],
+                         "INTERNAL://0.0.0.0:29092,CONTROLLER://127.0.0.1:9093")
+        self.assertEqual(generated["KAFKA_ADVERTISED_LISTENERS"],
+                         "INTERNAL://wm-kafka.railway.internal:29092")
+        self.assertEqual(generated["KAFKA_LISTENER_SECURITY_PROTOCOL_MAP"],
+                         "INTERNAL:SASL_SSL,CONTROLLER:PLAINTEXT")
+
+    def test_railway_listener_config_rejects_stale_or_insecure_overrides(self) -> None:
+        base = {
+            "KAFKA_PRIVATE_HOST": "wm-kafka.railway.internal", "KAFKA_PUBLIC_HOST": "tcp.example.test",
+            "KAFKA_PUBLIC_PORT": "45678", "KAFKA_PUBLIC_LISTENER_ENABLED": "true",
+        }
+        overrides = (
+            {"KAFKA_LISTENERS": "HOST://0.0.0.0:9092,CONTROLLER://127.0.0.1:9093"},
+            {"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP": "INTERNAL:PLAINTEXT,HOST:SASL_SSL,CONTROLLER:PLAINTEXT"},
+        )
+        for override in overrides:
+            with self.subTest(override=override):
+                result = subprocess.run(["bash", str(RAILWAY_LISTENERS)], env=os.environ | base | override,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 78)
+                self.assertIn("Kafka startup configuration error", result.stderr)
+
     def test_railway_startup_refuses_to_run_without_tls_credentials_and_listener_addresses(self) -> None:
         script = ROOT / "scripts" / "kafka-railway-entrypoint.sh"
         result = subprocess.run(["bash", str(script)], text=True, capture_output=True, env=os.environ | {"PATH": "/usr/bin:/bin"})
@@ -163,7 +212,7 @@ class KafkaTopicInitTests(unittest.TestCase):
         }
         result = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 78)
-        self.assertIn("All enabled client listeners must use SASL_SSL", result.stderr)
+        self.assertIn("KAFKA_LISTENER_SECURITY_PROTOCOL_MAP must be exactly", result.stderr)
         self.assertNotIn("P" * 40, result.stderr)
 
     def test_railway_startup_requires_keystore_ca_and_sasl_secrets(self) -> None:
