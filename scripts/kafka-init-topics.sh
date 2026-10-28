@@ -67,12 +67,20 @@ run_topics() {
 [[ "$replication" =~ ^[1-9][0-9]*$ ]] || { echo "KAFKA_REPLICATION_FACTOR must be a positive integer" >&2; exit 2; }
 
 for topic in wm.activation.requests wm.ws.commands wm.ws.events wm.operator.events; do
-    description="$(run_topics --bootstrap-server "$bootstrap" --describe --topic "$topic" 2>/dev/null || true)"
-    if [[ -z "$description" ]]; then
+    # --list is the authoritative existence check. In Kafka 3.8, --describe for
+    # a missing topic can exit successfully while printing Optional[topic] text.
+    topic_list="$(run_topics --bootstrap-server "$bootstrap" --list)"
+    if ! printf '%s\n' "$topic_list" | grep -Fqx -- "$topic"; then
         run_topics --bootstrap-server "$bootstrap" --create --if-not-exists \
             --topic "$topic" --partitions "$partitions" --replication-factor "$replication"
-        continue
+        topic_list="$(run_topics --bootstrap-server "$bootstrap" --list)"
+        if ! printf '%s\n' "$topic_list" | grep -Fqx -- "$topic"; then
+            echo "Topic creation was not confirmed for $topic" >&2
+            exit 1
+        fi
     fi
+
+    description="$(run_topics --bootstrap-server "$bootstrap" --describe --topic "$topic")"
 
     current="$(printf '%s\n' "$description" | sed -n 's/.*PartitionCount: \([0-9][0-9]*\).*/\1/p' | head -n 1)"
     if [[ -z "$current" ]]; then

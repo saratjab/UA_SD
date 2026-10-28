@@ -16,12 +16,21 @@ ROOT = Path(__file__).resolve().parents[1]
 FAKE_CLI = r'''#!/usr/bin/env python3
 import os, pathlib, sys
 args = sys.argv[1:]
+state = pathlib.Path(os.environ["FAKE_TOPIC_STATE"])
+if "--list" in args:
+    for path in sorted(state.iterdir()): print(path.name)
+    sys.exit(0)
 topic = args[args.index("--topic") + 1]
-path = pathlib.Path(os.environ["FAKE_TOPIC_STATE"]) / topic
+path = state / topic
 if "--describe" in args:
-    if not path.exists(): sys.exit(1)
+    if not path.exists():
+        print(f"Topic 'Optional[{topic}]' does not exist as expected")
+        sys.exit(0)
+    if os.environ.get("FAKE_FAIL_DESCRIBE") == topic: sys.exit(12)
     print(f"Topic: {topic}\tPartitionCount: {path.read_text()}\tReplicationFactor: 1")
 elif "--create" in args:
+    if os.environ.get("FAKE_FAIL_CREATE") == topic: sys.exit(13)
+    if os.environ.get("FAKE_HIDE_AFTER_CREATE") == topic: sys.exit(0)
     path.write_text(args[args.index("--partitions") + 1])
     with open(os.environ["FAKE_TOPIC_LOG"], "a") as out: out.write(f"create {topic} {path.read_text()} {args[args.index('--replication-factor') + 1]}\n")
 elif "--alter" in args:
@@ -55,6 +64,17 @@ class KafkaTopicInitTests(unittest.TestCase):
         subprocess.run(["bash", str(SCRIPT)], check=True, env=env, capture_output=True, text=True)
         return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
+    def run_with_env(self, root: Path, **overrides: str) -> subprocess.CompletedProcess[str]:
+        cli = root / "fake-kafka-topics"
+        cli.write_text(FAKE_CLI, encoding="utf-8")
+        cli.chmod(0o755)
+        (root / "state").mkdir(exist_ok=True)
+        env = os.environ | {
+            "KAFKA_TOPICS_BIN": str(cli), "FAKE_TOPIC_STATE": str(root / "state"),
+            "FAKE_TOPIC_LOG": str(root / "calls.log"),
+        } | overrides
+        return subprocess.run(["bash", str(SCRIPT)], check=False, env=env, capture_output=True, text=True)
+
     def test_creates_all_descriptive_topics_with_configured_partitions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -83,6 +103,37 @@ class KafkaTopicInitTests(unittest.TestCase):
             self.assertFalse(any(line.startswith(f"alter {TOPICS[2]} ") for line in calls))
             self.assertIn(f"create {TOPICS[3]} 3 1", calls)
             self.assertEqual((state / TOPICS[2]).read_text(), "5")
+
+    def test_kafka_38_optional_missing_topic_response_is_detected_by_list_and_created(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # The fake describe returns Kafka 3.8's successful Optional[topic] response
+            # for missing topics; the initializer must use --list to detect absence.
+            calls = self.run_initializer(root, partitions=3, replication=1)
+            self.assertEqual(sum(line.startswith("create ") for line in calls), 4)
+            self.assertEqual({line.split()[1] for line in calls if line.startswith("create ")}, set(TOPICS))
+
+    def test_existing_topics_are_described_without_recreation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            state.mkdir()
+            for topic in TOPICS:
+                (state / topic).write_text("3")
+            calls = self.run_initializer(root, partitions=3, replication=1)
+            self.assertFalse(any(line.startswith(("create ", "alter ")) for line in calls))
+
+    def test_failed_topic_operations_fail_initialization(self) -> None:
+        for operation, topic in (("FAKE_FAIL_CREATE", TOPICS[0]), ("FAKE_HIDE_AFTER_CREATE", TOPICS[0])):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                result = self.run_with_env(Path(directory), **{operation: topic})
+                self.assertNotEqual(result.returncode, 0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "state").mkdir()
+            (root / "state" / TOPICS[0]).write_text("2")
+            result = self.run_with_env(root, FAKE_FAIL_DESCRIBE=TOPICS[0])
+            self.assertNotEqual(result.returncode, 0)
 
     def test_kafka_38_server_properties_define_three_partition_single_broker_defaults(self) -> None:
         properties = ROOT / "config" / "kafka" / "server.properties"
@@ -283,7 +334,7 @@ class KafkaTopicInitTests(unittest.TestCase):
             result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             secure_lines = [line for line in log.read_text().splitlines() if line.startswith("SECURE_CONFIG")]
-            self.assertEqual(len(secure_lines), 4)  # all topic creates use the secure config
+            self.assertGreaterEqual(len(secure_lines), 4)  # list, create, and describe use secure config
             self.assertTrue(all("security.protocol=SASL_SSL" in line and "ssl.endpoint.identification.algorithm=https" in line for line in secure_lines))
             self.assertTrue(all("sasl.mechanism=PLAIN" in line and "wm-client" in line for line in secure_lines))
             self.assertNotIn("S" * 40, result.stdout + result.stderr)
