@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass
 
 
@@ -17,6 +18,7 @@ class EngineConfig:
     telemetry_interval: float
     reconnect_initial_delay: float = 0.5
     reconnect_max_delay: float = 5.0
+    state_path: str | None = None
 
     def __post_init__(self) -> None:
         if self.reconnect_initial_delay <= 0:
@@ -32,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kafka-port", required=True, type=int, help="Kafka bootstrap port")
     parser.add_argument("--monitor-host", required=True, help="WM_WS_M TCP host")
     parser.add_argument("--monitor-port", required=True, type=int, help="WM_WS_M TCP port")
+    parser.add_argument(
+        "--state-path", default=os.environ.get("ENGINE_STATE_PATH"),
+        help="Persistent SQLite path for Engine recovery state (default: legacy per-station file in the working directory)",
+    )
     parser.add_argument(
         "--flow-rate-lpm",
         type=float,
@@ -85,4 +91,5 @@ def parse_args(argv: list[str] | None = None) -> EngineConfig:
         telemetry_interval=args.telemetry_interval,
         reconnect_initial_delay=args.reconnect_initial_delay,
         reconnect_max_delay=args.reconnect_max_delay,
+        state_path=args.state_path,
     )

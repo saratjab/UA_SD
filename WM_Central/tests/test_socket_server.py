@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import socket
 import unittest
+from unittest.mock import patch
 
 from common import protocol
 from WM_Central.models import EndReason, StationStatus
-from WM_Central.socket_server import CentralSocketServer
+from WM_Central.socket_server import CentralSocketServer, MonitorConnection
 from WM_Central.state_manager import StateManager
 
 from .helpers import DatabaseTestCase, wait_until
@@ -216,6 +217,42 @@ class BadInputTests(SocketServerTestCase):
         sock = self.connect()
         self.assertEqual(self.call(sock, {"type": "HELLO"})["reason"], "unknown_type")
         self.assert_closed(sock)
+
+
+class SocketFailureVisibilityTests(unittest.TestCase):
+    def test_monitor_response_uses_bounded_write_timeout_and_restores_read_timeout(self) -> None:
+        first, second = socket.socketpair()
+        try:
+            first.settimeout(None)
+            connection = MonitorConnection(first, ("127.0.0.1", 1234))
+            write_timeouts: list[float | None] = []
+            with patch(
+                "WM_Central.socket_server.protocol.send_message",
+                side_effect=lambda sock, _message: write_timeouts.append(sock.gettimeout()),
+            ) as send:
+                connection.send({"type": "ACK"})
+            self.assertEqual(write_timeouts, [5.0])
+            self.assertEqual(send.call_count, 1)
+            self.assertIsNone(first.gettimeout())
+        finally:
+            first.close()
+            second.close()
+
+    def test_send_failure_includes_monitor_context_in_log(self) -> None:
+        class FailedConnection:
+            address = ("10.0.0.4", 8123)
+            ws_id = "WS_001"
+
+            def __repr__(self) -> str:
+                return "<MonitorConnection 10.0.0.4:8123 ws_id=WS_001>"
+
+            def send(self, _message):
+                raise OSError("peer reset")
+
+        with self.assertLogs("WM_Central.socket_server", level="WARNING") as captured:
+            sent = CentralSocketServer._send(FailedConnection(), {"type": "ACK"})  # type: ignore[arg-type]
+        self.assertFalse(sent)
+        self.assertIn("Monitor <MonitorConnection 10.0.0.4:8123 ws_id=WS_001>", "\n".join(captured.output))
 
 
 class ManyStationsTests(SocketServerTestCase):

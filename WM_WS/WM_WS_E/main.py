@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import signal
 import sys
 import threading
@@ -47,10 +48,16 @@ def main(argv: list[str] | None = None) -> int:
     engine = WateringStationEngine(config)
     signal.signal(signal.SIGTERM, lambda _signum, _frame: engine.close())
     worker = None
+    kafka = None
     poll_stop = threading.Event()
     poll_thread = None
     try:
-        kafka = EngineKafkaService(engine, KafkaPublisher(f"{config.kafka_host}:{config.kafka_port}"))
+        # Keep the legacy per-station path when no explicit persistent location
+        # is configured, while allowing deployment mounts to survive container replacement.
+        state_path = Path(config.state_path) if config.state_path else Path(
+            f".wm_ws_e_{config.ws_id or 'unassigned'}.sqlite3"
+        )
+        kafka = EngineKafkaService(engine, KafkaPublisher(f"{config.kafka_host}:{config.kafka_port}"), state_path)
         worker = kafka.worker(f"{config.kafka_host}:{config.kafka_port}")
         worker.start()
         poll_thread = threading.Thread(
@@ -73,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 worker.close()
+        if kafka is not None:
+            kafka.close()
 
 
 def _poll_worker(worker: object, stop: threading.Event) -> None:

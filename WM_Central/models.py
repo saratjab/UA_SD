@@ -48,6 +48,7 @@ class DenyReason(str, Enum):
 class EndReason(str, Enum):
     # Reported by the Engine
     DURATION = "DURATION"
+    TARGET_VOLUME = "TARGET_VOLUME"
     MANUAL = "MANUAL"
     LEAK = "LEAK"
     BLOCKED = "BLOCKED"
@@ -101,6 +102,7 @@ class IrrigationRecord:
     duration_s: float | None
     total_volume_l: float | None
     end_reason: EndReason | None
+    requested_volume_l: float | None = None
 
 
 @dataclass(frozen=True)

@@ -26,6 +26,17 @@ CREATE TABLE IF NOT EXISTS operators (
     active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))
 );
 
+-- Transactional publication queue. Kafka delivery is at least once; message_id
+-- remains stable across retries and consumers must apply idempotently.
+CREATE TABLE IF NOT EXISTS kafka_outbox (
+    message_id TEXT PRIMARY KEY,
+    topic TEXT NOT NULL,
+    message_key TEXT,
+    message_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT
+);
+
 
 -- A row exists only after a WS has enrolled (REGISTER_WS with ws_id + location).
 -- admin_state is the ONLY durable "state" of a station:
@@ -77,13 +88,14 @@ CREATE TABLE IF NOT EXISTS irrigations (
                                                 'OPERATOR_INACTIVE', 'ENGINE_BLOCKED',
                                                 'ENGINE_FAILED', 'MONITOR_UNAVAILABLE')),
     requested_duration_s INTEGER CHECK (requested_duration_s IS NULL OR requested_duration_s > 0),
+    requested_volume_l   REAL CHECK (requested_volume_l IS NULL OR requested_volume_l > 0),
     requested_at         TEXT NOT NULL,
     started_at           TEXT,
     ended_at             TEXT,
     duration_s           REAL,             -- actual, reported by the Engine
     total_volume_l       REAL CHECK (total_volume_l IS NULL OR total_volume_l >= 0),
     end_reason           TEXT
-                         CHECK (end_reason IN ('DURATION', 'MANUAL', 'LEAK', 'BLOCKED',
+                         CHECK (end_reason IN ('DURATION', 'TARGET_VOLUME', 'MANUAL', 'LEAK', 'BLOCKED',
                                                'DISCONNECTED', 'CENTRAL_RESTART')),
 
     -- A row is DENIED  <=> it has a deny_reason.
@@ -98,9 +110,7 @@ CREATE TABLE IF NOT EXISTS irrigations (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_irrigations_one_live_per_ws
     ON irrigations (ws_id) WHERE status IN ('AUTHORIZED', 'WATERING');
 
--- Startup recovery (run by Central on every start, before accepting traffic):
---   UPDATE irrigations
---      SET status = 'ENDED', end_reason = 'CENTRAL_RESTART', ended_at = :now
---    WHERE status = 'AUTHORIZED';
--- WATERING rows remain live so retained Engine events can complete them after
--- Central restarts during an irrigation.
+-- Startup recovery keeps AUTHORIZED rows live while their durable START command
+-- is retried and keeps WATERING rows live while Engine final events are replayed.
+-- Engine restart recovery safely closes the valve and emits an interrupted final
+-- result rather than restarting an in-flight cycle.

@@ -19,12 +19,15 @@ Design rules (see docs/adr/ADR-001-state-model-and-schema.md):
 from __future__ import annotations
 
 import logging
+import json
 import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
+
+from common.kafka_contract import message_key
 
 from .models import (
     AdminState,
@@ -124,16 +127,57 @@ class Database:
         with self._lock:
             conn = self._conn()
             self._migrate_engine_rejection_reasons(conn)
+            self._migrate_requested_volume(conn)
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            self._migrate_outbox_keys(conn)
+
+    @staticmethod
+    def _migrate_requested_volume(conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(irrigations)")}
+        if columns and "requested_volume_l" not in columns:
+            conn.execute("ALTER TABLE irrigations ADD COLUMN requested_volume_l REAL CHECK (requested_volume_l IS NULL OR requested_volume_l > 0)")
+
+    @staticmethod
+    def _migrate_outbox_keys(conn: sqlite3.Connection) -> None:
+        rows = conn.execute("SELECT message_id, topic, message_json FROM kafka_outbox WHERE message_key IS NULL").fetchall()
+        for row in rows:
+            try:
+                key = message_key(row["topic"], json.loads(row["message_json"]))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if key is not None:
+                conn.execute("UPDATE kafka_outbox SET message_key=? WHERE message_id=?", (key, row["message_id"]))
+
+    @staticmethod
+    def _insert_outgoing(conn: sqlite3.Connection, outgoing: list[tuple[str, str, str | None, dict[str, Any]]]) -> None:
+        import json
+        for message_id, topic, key, message in outgoing:
+            conn.execute(
+                "INSERT OR IGNORE INTO kafka_outbox (message_id, topic, message_key, message_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (message_id, topic, key, json.dumps(message, separators=(",", ":"), sort_keys=True), utc_now()),
+            )
+
+    def pending_outgoing(self, limit: int = 100) -> list[tuple[str, str, str | None, dict[str, Any]]]:
+        import json
+        rows = self._all("SELECT message_id, topic, message_key, message_json FROM kafka_outbox WHERE delivered_at IS NULL ORDER BY created_at, message_id LIMIT ?", (limit,))
+        return [(r["message_id"], r["topic"], r["message_key"], json.loads(r["message_json"])) for r in rows]
+
+    def mark_outgoing_delivered(self, message_id: str) -> None:
+        with self.transaction() as conn:
+            conn.execute("UPDATE kafka_outbox SET delivered_at = ? WHERE message_id = ? AND delivered_at IS NULL", (self._clock(), message_id))
+
+    def add_outgoing(self, message_id: str, topic: str, key: str | None, message: dict[str, Any]) -> None:
+        with self.transaction() as conn:
+            self._insert_outgoing(conn, [(message_id, topic, key, message)])
 
     @staticmethod
     def _migrate_engine_rejection_reasons(conn: sqlite3.Connection) -> None:
-        """Extend deny_reason CHECK while preserving existing irrigation rows."""
+        """Extend terminal reason checks while preserving existing irrigation rows."""
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='irrigations'"
         ).fetchone()
         if row is None or all(reason in row["sql"] for reason in (
-            "ENGINE_BLOCKED", "ENGINE_FAILED", "MONITOR_UNAVAILABLE",
+            "ENGINE_BLOCKED", "ENGINE_FAILED", "MONITOR_UNAVAILABLE", "TARGET_VOLUME",
         )):
             return
         conn.execute("PRAGMA foreign_keys = OFF")
@@ -148,22 +192,23 @@ class Database:
                 status TEXT NOT NULL CHECK (status IN ('DENIED', 'AUTHORIZED', 'WATERING', 'ENDED')),
                 deny_reason TEXT CHECK (deny_reason IN ('WS_DISCONNECTED', 'WS_LEAK', 'WS_OUT_OF_SERVICE', 'WS_BUSY', 'OPERATOR_INACTIVE', 'ENGINE_BLOCKED', 'ENGINE_FAILED', 'MONITOR_UNAVAILABLE')),
                 requested_duration_s INTEGER CHECK (requested_duration_s IS NULL OR requested_duration_s > 0),
+                requested_volume_l REAL CHECK (requested_volume_l IS NULL OR requested_volume_l > 0),
                 requested_at TEXT NOT NULL,
                 started_at TEXT,
                 ended_at TEXT,
                 duration_s REAL,
                 total_volume_l REAL CHECK (total_volume_l IS NULL OR total_volume_l >= 0),
-                end_reason TEXT CHECK (end_reason IN ('DURATION', 'MANUAL', 'LEAK', 'BLOCKED', 'DISCONNECTED', 'CENTRAL_RESTART')),
+                end_reason TEXT CHECK (end_reason IN ('DURATION', 'TARGET_VOLUME', 'MANUAL', 'LEAK', 'BLOCKED', 'DISCONNECTED', 'CENTRAL_RESTART')),
                 CHECK ((status = 'DENIED') = (deny_reason IS NOT NULL)),
                 CHECK ((status = 'ENDED') = (end_reason IS NOT NULL)),
                 CHECK (status <> 'ENDED' OR ended_at IS NOT NULL)
             )""")
             conn.execute("""INSERT INTO irrigations
                 (irrigation_id, request_id, ws_id, operator_id, status, deny_reason,
-                 requested_duration_s, requested_at, started_at, ended_at, duration_s,
+                 requested_duration_s, requested_volume_l, requested_at, started_at, ended_at, duration_s,
                  total_volume_l, end_reason)
                 SELECT irrigation_id, request_id, ws_id, operator_id, status, deny_reason,
-                       requested_duration_s, requested_at, started_at, ended_at, duration_s,
+                       requested_duration_s, NULL, requested_at, started_at, ended_at, duration_s,
                        total_volume_l, end_reason FROM irrigations_legacy""")
             conn.execute("DROP TABLE irrigations_legacy")
             conn.execute("COMMIT")
@@ -179,22 +224,14 @@ class Database:
             self._conn().executescript(Path(path).read_text(encoding="utf-8"))
 
     def recover_open_irrigations(self) -> int:
-        """Close authorizations that never reached the Engine at startup.
+        """Keep live requests recoverable while their outbox/Engine can resolve them.
 
-        Keep WATERING rows live: the Engine can continue a finite irrigation
-        while CENTRAL is restarting, and its retained Kafka completion must be
-        able to finish the same request after the event consumer resumes.
+        An AUTHORIZED request may have a durable START command awaiting delivery;
+        closing it here would allow that command to execute against a terminal row.
+        Engine restart recovery emits an interrupted completion for any active
+        cycle it cannot safely resume.
         """
-        now = self._clock()
-        with self.transaction() as conn:
-            cursor = conn.execute(
-                "UPDATE irrigations SET status = 'ENDED', end_reason = ?, ended_at = ? "
-                "WHERE status = 'AUTHORIZED'",
-                (EndReason.CENTRAL_RESTART.value, now),
-            )
-        if cursor.rowcount:
-            LOGGER.warning("Closed %d irrigation(s) left open by a previous run", cursor.rowcount)
-        return cursor.rowcount
+        return 0
 
     # ------------------------------------------------------------------
     # Operators
@@ -265,12 +302,13 @@ class Database:
     def list_stations(self) -> list[Station]:
         return [_station(row) for row in self._all("SELECT * FROM watering_stations ORDER BY ws_id")]
 
-    def set_admin_state(self, ws_id: str, state: AdminState) -> bool:
+    def set_admin_state(self, ws_id: str, state: AdminState, outgoing: list[tuple[str, str, str | None, dict[str, Any]]] | None = None) -> bool:
         with self.transaction() as conn:
             cursor = conn.execute(
                 "UPDATE watering_stations SET admin_state = ? WHERE ws_id = ?",
                 (state.value, ws_id),
             )
+            self._insert_outgoing(conn, outgoing or [])
         return cursor.rowcount == 1
 
     def touch_last_seen(self, ws_id: str) -> None:
@@ -328,6 +366,9 @@ class Database:
         operator_id: str | None,
         requested_duration_s: int | None,
         deny_reason: DenyReason | None = None,
+        outgoing: list[tuple[str, str, str | None, dict[str, Any]]] | None = None,
+        denied_outgoing: list[tuple[str, str, str | None, dict[str, Any]]] | None = None,
+        requested_volume_l: float | None = None,
     ) -> IrrigationRecord:
         """Persist one request as AUTHORIZED, or DENIED if ``deny_reason`` is given.
 
@@ -351,8 +392,8 @@ class Database:
             status = IrrigationStatus.DENIED if deny_reason else IrrigationStatus.AUTHORIZED
             conn.execute(
                 "INSERT INTO irrigations "
-                "(request_id, ws_id, operator_id, status, deny_reason, requested_duration_s, requested_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(request_id, ws_id, operator_id, status, deny_reason, requested_duration_s, requested_volume_l, requested_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     request_id,
                     ws_id,
@@ -360,15 +401,17 @@ class Database:
                     status.value,
                     deny_reason.value if deny_reason else None,
                     requested_duration_s,
+                    requested_volume_l,
                     self._clock(),
                 ),
             )
             row = conn.execute(
                 "SELECT * FROM irrigations WHERE request_id = ?", (request_id,)
             ).fetchone()
+            self._insert_outgoing(conn, (denied_outgoing if deny_reason else outgoing) or [])
         return _irrigation(row)
 
-    def mark_irrigation_started(self, request_id: str, started_at: str | None = None) -> bool:
+    def mark_irrigation_started(self, request_id: str, started_at: str | None = None, outgoing: list[tuple[str, str, str | None, dict[str, Any]]] | None = None) -> bool:
         """AUTHORIZED -> WATERING (first sign of life from the Engine)."""
         with self.transaction() as conn:
             cursor = conn.execute(
@@ -376,9 +419,10 @@ class Database:
                 "WHERE request_id = ? AND status = 'AUTHORIZED'",
                 (started_at or self._clock(), request_id),
             )
+            self._insert_outgoing(conn, outgoing or [])
         return cursor.rowcount == 1
 
-    def reject_authorized_irrigation(self, request_id: str, reason: DenyReason) -> bool:
+    def reject_authorized_irrigation(self, request_id: str, reason: DenyReason, outgoing: list[tuple[str, str, str | None, dict[str, Any]]] | None = None) -> bool:
         """Record an Engine rejection before watering as DENIED, not ENDED."""
         if reason not in {DenyReason.ENGINE_BLOCKED, DenyReason.ENGINE_FAILED, DenyReason.MONITOR_UNAVAILABLE}:
             raise ValueError("reason must describe an Engine start rejection")
@@ -388,6 +432,7 @@ class Database:
                 "WHERE request_id = ? AND status = 'AUTHORIZED'",
                 (reason.value, request_id),
             )
+            self._insert_outgoing(conn, outgoing or [])
         return cursor.rowcount == 1
 
     def end_irrigation(
@@ -398,6 +443,7 @@ class Database:
         duration_s: float | None = None,
         total_volume_l: float | None = None,
         ended_at: str | None = None,
+        outgoing: list[tuple[str, str, str | None, dict[str, Any]]] | None = None,
     ) -> bool:
         """Close a live irrigation. Returns False if it was not live (idempotent)."""
         with self.transaction() as conn:
@@ -413,6 +459,7 @@ class Database:
                     request_id,
                 ),
             )
+            self._insert_outgoing(conn, outgoing or [])
         return cursor.rowcount == 1
 
     def add_terminal_measurements(
@@ -518,4 +565,5 @@ def _irrigation(row: sqlite3.Row) -> IrrigationRecord:
         duration_s=row["duration_s"],
         total_volume_l=row["total_volume_l"],
         end_reason=EndReason(row["end_reason"]) if row["end_reason"] else None,
+        requested_volume_l=row["requested_volume_l"] if "requested_volume_l" in row.keys() else None,
     )

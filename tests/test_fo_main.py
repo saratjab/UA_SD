@@ -7,12 +7,57 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from WM_FO.main import _interactive_mode, main
+from WM_FO.main import _file_mode, _interactive_mode, main
 
 REAL_THREAD = threading.Thread
 
 
 class FieldOperatorInteractiveTests(unittest.TestCase):
+    def test_file_mode_waits_sequentially_and_waits_four_seconds_after_denial(self) -> None:
+        events = []
+
+        class Operator:
+            count = 0
+            terminal_results = iter(["ACTIVATION_DENIED", "IRRIGATION_COMPLETED", "IRRIGATION_COMPLETED"])
+
+            def request_irrigation(self, ws_id, duration=None, target=None):
+                self.count += 1
+                request_id = f"r{self.count}"
+                events.append(("request", ws_id, duration, target, request_id))
+                return request_id
+
+            def wait_for_result(self, request_id, timeout):
+                result = next(self.terminal_results)
+                events.append(("terminal", request_id, timeout, result))
+                return True
+
+        records = [
+            {"ws_id": "WS_001", "duration_seconds": 5},
+            {"ws_id": "WS_002", "target_volume_liters": 2.0},
+            {"ws_id": "WS_003"},
+        ]
+        with mock.patch("WM_FO.main.load_requests", return_value=records), \
+                mock.patch("WM_FO.main.time.sleep", side_effect=lambda seconds: events.append(("sleep", seconds))):
+            _file_mode(Operator(), "unused.jsonl", timeout=1)
+
+        self.assertEqual(events, [
+            ("request", "WS_001", 5, None, "r1"), ("terminal", "r1", None, "ACTIVATION_DENIED"), ("sleep", 4.0),
+            ("request", "WS_002", None, 2.0, "r2"), ("terminal", "r2", None, "IRRIGATION_COMPLETED"), ("sleep", 4.0),
+            ("request", "WS_003", None, None, "r3"), ("terminal", "r3", None, "IRRIGATION_COMPLETED"),
+        ])
+
+    def test_file_mode_does_not_advance_if_terminal_waiter_is_lost(self) -> None:
+        operator = mock.Mock()
+        operator.request_irrigation.return_value = "r1"
+        operator.wait_for_result.return_value = False
+        records = [{"ws_id": "WS_001"}, {"ws_id": "WS_002", "duration_seconds": 2}]
+        with mock.patch("WM_FO.main.load_requests", return_value=records), \
+                mock.patch("WM_FO.main.time.sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "lost its terminal-result waiter"):
+                _file_mode(operator, "unused.jsonl", timeout=1)
+        operator.request_irrigation.assert_called_once_with("WS_001", None, None)
+        sleep.assert_not_called()
+
     def test_q_at_station_prompt_exits_without_submitting(self) -> None:
         operator = mock.Mock()
         with mock.patch("builtins.input", side_effect=["  Q  "]):

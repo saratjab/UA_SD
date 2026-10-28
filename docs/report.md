@@ -62,9 +62,9 @@ flowchart LR
   `HELLO_ACK` session before accepting irrigation. It operates the valve and
   flow meter, consumes commands, and publishes start, telemetry, rejection,
   and completion events.
-- **WM_FO (Field Operator)** submits a station and duration for its operator ID
-  and displays the corresponding authorization, progress, denial, and final
-  result.
+- **WM_FO (Field Operator)** submits duration, target-volume, or manual-stop
+  requests, including sequential JSONL request files, and displays progress and
+  final results with request and station IDs.
 - **Kafka** connects the asynchronous request/command/event path. Topic names,
   fields, correlation IDs, and event types are specified in the
   [Kafka contract](kafka-message-contract.md).
@@ -74,12 +74,13 @@ flowchart LR
 
 ## 3. Irrigation message flow
 
-1. FO publishes an `ACTIVATION_REQUEST` containing `ws_id`, `operator_id`, a
-   positive whole-number duration, and a unique `request_id`.
+1. FO publishes an `ACTIVATION_REQUEST` containing `ws_id`, `operator_id`, one
+   optional mode (`duration_seconds` or `target_volume_liters`), and a unique
+   `request_id`. Omitting both limits means run until manually stopped.
 2. Central checks that the operator and station are registered and that the
-   station is available. It records the request, publishes `START_IRRIGATION`
-   to `wm.ws.commands`, and sends authorization or denial on
-   `wm.operator.events`.
+   station is available. It commits the request and stable-keyed outgoing
+   command/operator messages together in its SQLite outbox. Delivery retries
+   after restart until Kafka confirms each record.
 3. The station Engine consumes the command. A matching station ID and an
    established Monitor session are required before it starts. An Engine that is
    blocked, failed, or disconnected from its Monitor emits a rejection rather
@@ -92,10 +93,15 @@ flowchart LR
    request ID keeps the messages attached to the same irrigation throughout
    the workflow.
 
-The socket protocol uses the shared frame format
-`<STX> JSON <ETX> <LRC>`, where LRC is the XOR of the JSON payload bytes. It is
-used for Monitor registration/control responses and Monitor–Engine
-handshaking/health messages; it is not the Kafka envelope format.
+The socket protocol uses `<STX><DATA><ETX><LRC>`, where DATA is a UTF-8 JSON
+object and LRC is the XOR of its bytes. Both peers use the shared framing and
+LRC validation; this is the Monitor registration/control and Monitor–Engine
+handshake/health protocol, separate from Kafka envelopes. Central applies a
+10-second registration read timeout and a bounded 5-second response write
+timeout, then permits idle registered sockets while TCP keepalive detects dead
+peers. Monitors continue the configured one-second health-check cadence and
+use a bounded health response timeout; on connection loss they report the
+failure and reconnect/re-register with Central.
 
 ## 4. Station state, controls, and persistence
 
@@ -115,12 +121,16 @@ keeps a block or fault durable while the station is disconnected. The
 [ADR-001 state-model decision](adr/ADR-001-state-model-and-schema.md) describes
 the rationale and schema invariants.
 
-Central's terminal accepts `START <station|all> <seconds> [operator_id]`,
-`BLOCK <station|all>`, `ACTIVATE <station|all>`, `HELP`, and `QUIT` (see
-`WM_Central/monitoring.py` for the exact parser and output). BLOCK persists the
-administrative state and stops active irrigation; ACTIVATE refuses stations
-that are disconnected or faulted. START issues an irrigation through the same
-command path.
+Central's optional interactive terminal presents a numbered menu for status,
+single/all eligible irrigation, block, and activate actions. It is isolated on
+its own daemon thread; absent/non-interactive stdin disables only the menu and
+stdin EOF never shuts down the service. BLOCK persists the administrative
+state and stops active irrigation; ACTIVATE refuses stations that are
+disconnected or faulted. START issues irrigation through the same transactional
+outbox path. Headless Central also provides an authenticated HTTP admin API;
+public use requires HTTPS through Railway's TLS-terminating domain and a
+configured token. Railway resources and cross-network access still need setup
+and verification; see the [deployment runbook](railway-deployment.md).
 
 SQLite uses constraints and unique indexes to enforce one live irrigation per
 station, one open fault per station, and one row per request ID. Those checks
@@ -151,6 +161,10 @@ handler.
   persist. Central preserves a `WATERING` record at startup so a queued Engine
   completion can add the actual duration and volume after Central returns.
   Replay is guarded by request IDs and idempotent state transitions.
+- **Engine process restart:** its local SQLite recovery store preserves the
+  request and latest measurements. Recovery closes the valve and publishes a
+  final interrupted result instead of restarting the cycle; an unpublished
+  completion remains queued with a stable message ID.
 - **FO process restart:** an operator's stable Kafka group resumes from its
   last committed offset. A completion left unprocessed can be displayed when
   that operator reconnects, without replaying all topic history to every new
@@ -164,7 +178,10 @@ Kafka consumers use manual commits after their handlers succeed. This gives
 at-least-once processing, not exactly-once side effects in every crash window;
 the database's unique request IDs and guarded transitions provide the
 application-level idempotency. The local single-node Kafka broker has no broker
-redundancy.
+redundancy. Topics use three partitions by default. Activation requests,
+commands, and station events key by `ws_id`; operator notifications key by
+`operator_id`. This retains order per entity within each topic and allows
+partition-level parallelism; there is no global ordering across keys or topics.
 
 ## 6. Local deployment and verification
 
@@ -177,11 +194,11 @@ operator launch, status/log checks, and safe restart commands.
 
 Reported verification for this submission:
 
-- Latest full automated run: **189 passed, 1 skipped, 26 subtests passed**.
-  The skipped test is the opt-in real-broker integration test when run as part
-  of the default suite.
-- The real-Kafka activation-to-completion integration test passed separately
-  with the local broker enabled.
+- Latest full automated run: **266 tests passed, no skips**, with
+  `RUN_KAFKA_INTEGRATION=1 RUN_KAFKA_SECURE_INTEGRATION=1
+  KAFKA_BOOTSTRAP=localhost:9092`. This includes the real-broker lifecycle,
+  partition-ordering, and temporary SASL_SSL broker tests. Railway has not been
+  deployed or tested.
 - Local Docker smoke checks, station/Engine recovery, Central restart recovery,
   and overlapping irrigation on both local stations have been exercised.
 - The checks verified request authorization, irrigation start, telemetry,

@@ -8,7 +8,9 @@ on top of ``StateManager.snapshot()`` in a later step.
 from __future__ import annotations
 
 import logging
+import sys
 import threading
+from collections.abc import Callable
 
 from .models import StationStatus, StationView
 from .state_manager import StateManager
@@ -116,13 +118,127 @@ def execute_control_line(line: str, state: StateManager, service: object, logger
 
 
 def control_loop(state: StateManager, service: object, stop: threading.Event) -> None:
-    """stdin runs on its own thread so socket and Kafka event processing continues."""
+    """Run the optional terminal menu on its own thread.
+
+    EOF disables the menu only; it must never stop the Central service. In
+    headless deployments callers should avoid starting this thread at all.
+    """
+    logger = logging.getLogger("wm_central.control")
+    if not _stdin_is_interactive():
+        logger.info("Interactive menu disabled: stdin is not an interactive terminal")
+        return
     while not stop.is_set():
         try:
-            line = input("central> ")
+            show_control_menu(logger)
+            choice = input("Central choice: ").strip()
         except (EOFError, OSError):
-            stop.set()
+            logger.info("Interactive menu input closed; Central service continues")
             return
-        if not execute_control_line(line, state, service):
-            stop.set()
-            return
+        try:
+            if not execute_menu_choice(choice, state, service, logger):
+                logger.info("Interactive menu closed; Central service continues")
+                return
+        except Exception:
+            logger.exception("Central menu action %r failed", choice)
+
+
+def start_control_menu(state: StateManager, service: object, stop: threading.Event) -> threading.Thread | None:
+    """Start the optional menu only when stdin is attached to a terminal."""
+    if not _stdin_is_interactive():
+        logging.getLogger("wm_central.control").info(
+            "Interactive Central menu disabled: stdin is not a terminal; the service continues headlessly"
+        )
+        return None
+    thread = threading.Thread(target=control_loop, args=(state, service, stop), name="central-control", daemon=True)
+    thread.start()
+    return thread
+
+
+def _stdin_is_interactive() -> bool:
+    return bool(getattr(sys.stdin, "isatty", lambda: False)())
+
+
+def show_control_menu(logger: logging.Logger | None = None) -> None:
+    logger = logger or logging.getLogger("wm_central.control")
+    logger.info(
+        "Central controls:\n"
+        "  1. Display station status\n"
+        "  2. Start irrigation for one station\n"
+        "  3. Start irrigation on all eligible stations\n"
+        "  4. Block one station\n"
+        "  5. Block all stations\n"
+        "  6. Activate one station\n"
+        "  7. Activate all stations\n"
+        "  0. Close menu"
+    )
+
+
+def execute_menu_choice(
+    choice: str,
+    state: StateManager,
+    service: object,
+    logger: logging.Logger | None = None,
+    *,
+    input_fn: Callable[[str], str] | None = None,
+) -> bool:
+    """Execute one numbered Central menu choice; return False for menu exit."""
+    logger = logger or logging.getLogger("wm_central.control")
+    read = input_fn or input
+    choice = choice.strip()
+    if choice == "0":
+        return False
+    if choice == "1":
+        logger.info("Station status:\n%s", format_station_table(state.snapshot()))
+        return True
+    if choice not in {"2", "3", "4", "5", "6", "7"}:
+        logger.error("Invalid menu choice %r. Enter a number from 0 to 7.", choice)
+        return True
+
+    action = {"2": "START", "3": "START", "4": "BLOCK", "5": "BLOCK", "6": "ACTIVATE", "7": "ACTIVATE"}[choice]
+    all_stations = choice in {"3", "5", "7"}
+    if all_stations:
+        targets = [station.ws_id for station in state.snapshot()]
+        if choice == "3":
+            targets = [station.ws_id for station in state.snapshot() if station.status is StationStatus.AVAILABLE]
+            if not targets:
+                logger.warning("No eligible AVAILABLE stations to start")
+                return True
+    else:
+        ws_id = read("Station ID: ").strip()
+        targets = select_station_ids(ws_id, state)
+        if not targets:
+            logger.error("Invalid station ID %r; no registered station matches it", ws_id)
+            return True
+
+    if action == "START":
+        raw_duration = read("Duration in whole seconds: ").strip()
+        try:
+            duration = int(raw_duration)
+            if duration <= 0:
+                raise ValueError
+        except ValueError:
+            logger.error("Duration must be a positive whole number of seconds")
+            return True
+        operators = state.operators()
+        operator_id = next((op.operator_id for op in operators if op.active), None)
+        if operator_id is None:
+            logger.error("No active operator is registered; irrigation was not started")
+            return True
+        for target in targets:
+            request_id = service.start_irrigation(target, duration, operator_id)
+            record = state.irrigation(request_id)
+            if record is None or record.status.value != "AUTHORIZED":
+                reason = getattr(getattr(record, "deny_reason", None), "value", "unknown")
+                logger.warning("Irrigation denied for station %s (request %s): %s", target, request_id, reason)
+            else:
+                logger.info("Irrigation authorized for station %s (request %s)", target, request_id)
+        return True
+
+    event = "BLOCK_WS" if action == "BLOCK" else "ACTIVATE_WS"
+    for target in targets:
+        ok = service.issue_station_command(event, target)
+        if ok:
+            logger.info("%s accepted for station %s", action, target)
+        else:
+            logger.warning("%s refused for station %s (disconnected, faulted, or invalid state)", action, target)
+    return True

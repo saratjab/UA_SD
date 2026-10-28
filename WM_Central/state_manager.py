@@ -177,20 +177,20 @@ class StateManager:
     # CENTRAL commands (state side; Kafka delivery comes later)
     # ------------------------------------------------------------------
 
-    def block_station(self, ws_id: str) -> CommandOutcome:
+    def block_station(self, ws_id: str, outgoing=None) -> CommandOutcome:
         """BLOCK WS: end any irrigation in progress, then OUT OF SERVICE."""
         with self._lock:
-            if not self._db.set_admin_state(ws_id, AdminState.BLOCKED):
+            if not self._db.set_admin_state(ws_id, AdminState.BLOCKED, outgoing):
                 return CommandOutcome(False)
             ended = self._db.end_live_irrigation(ws_id, EndReason.BLOCKED)
         LOGGER.info("WS %s BLOCKED", ws_id)
         return CommandOutcome(True, ended.request_id if ended else None)
 
-    def activate_station(self, ws_id: str) -> CommandOutcome:
+    def activate_station(self, ws_id: str, outgoing=None) -> CommandOutcome:
         with self._lock:
             if ws_id not in self._connections or self._db.get_open_fault(ws_id) is not None:
                 return CommandOutcome(False)
-            ok = self._db.set_admin_state(ws_id, AdminState.ACTIVE)
+            ok = self._db.set_admin_state(ws_id, AdminState.ACTIVE, outgoing)
         if ok:
             LOGGER.info("WS %s ACTIVATED", ws_id)
         return CommandOutcome(ok)

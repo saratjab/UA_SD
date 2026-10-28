@@ -219,11 +219,11 @@ class IrrigationTests(DatabaseTestCase):
         self.assertEqual((ended.request_id, ended.end_reason), ("r1", EndReason.BLOCKED))
         self.assertIsNone(self.db.end_live_irrigation("WS_001", EndReason.BLOCKED))
 
-    def test_startup_recovery_closes_live_irrigations(self) -> None:
+    def test_startup_recovery_preserves_authorization_for_durable_start_replay(self) -> None:
         self.request("r1")
-        self.assertEqual(self.db.recover_open_irrigations(), 1)
+        self.assertEqual(self.db.recover_open_irrigations(), 0)
         record = self.db.get_irrigation("r1")
-        self.assertEqual(record.end_reason, EndReason.CENTRAL_RESTART)
+        self.assertEqual(record.status, IrrigationStatus.AUTHORIZED)
 
     def test_startup_recovery_preserves_watering_for_replayed_engine_events(self) -> None:
         self.request("r1")

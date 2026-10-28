@@ -14,8 +14,9 @@ from WM_FO.main import _poll_worker
 
 class FieldOperatorKafkaTests(unittest.TestCase):
     class Publisher:
+        def __init__(self): self.records = []
         def publish(self, *_args, **_kwargs):
-            pass
+            self.records.append((_args, _kwargs))
 
     def test_same_operator_uses_stable_group_and_routes_live_events_by_request(self) -> None:
         publisher = self.Publisher()
@@ -46,6 +47,20 @@ class FieldOperatorKafkaTests(unittest.TestCase):
             second.handle_bytes(json.dumps(event).encode())
             self.assertFalse(second._pending[second_request].is_set())
             self.assertEqual(display.call_count, 1)
+
+    def test_target_volume_activation_uses_station_key(self) -> None:
+        publisher = self.Publisher()
+        operator = FieldOperator("OP_001", publisher)  # type: ignore[arg-type]
+        operator.request_irrigation("WS_009", target_volume_liters=2.5)
+        args, kwargs = publisher.records[0]
+        self.assertEqual(args[0], "wm.activation.requests")
+        self.assertEqual(args[1]["payload"], {"target_volume_liters": 2.5})
+        self.assertEqual(kwargs["key"], "WS_009")
+
+    def test_field_operator_rejects_mixed_modes(self) -> None:
+        operator = FieldOperator("OP_001", self.Publisher())  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "not both"):
+            operator.request_irrigation("WS_001", 2, 1.0)
 
     def test_restarted_operator_resumes_and_displays_completion_once(self) -> None:
         publisher = self.Publisher()
@@ -83,8 +98,8 @@ class FieldOperatorKafkaTests(unittest.TestCase):
 
         self.assertEqual(groups, [previous_process._consumer_group_id])
         self.assertIn(request_id, output.getvalue())
-        self.assertIn("30.0 s, 3.0 L, reason TIME_LIMIT", output.getvalue())
-        self.assertEqual(output.getvalue().count("Irrigation completed"), 1)
+        self.assertIn("elapsed 30.0 s, total volume 3.0 L, reason TIME_LIMIT", output.getvalue())
+        self.assertEqual(output.getvalue().count("completed:"), 1)
 
     def test_fresh_operator_starts_at_latest_and_filters_other_operators(self) -> None:
         operator = FieldOperator("OP_NEW", self.Publisher())  # type: ignore[arg-type]
@@ -138,9 +153,9 @@ class FieldOperatorKafkaTests(unittest.TestCase):
             self.assertTrue(operator.handle_bytes(encode(completed)))
             self.assertTrue(operator.handle_bytes(encode(completed)))
             self.assertTrue(operator.wait_for_result(request_id, timeout=0.01))
-        self.assertIn(f"[WS_001] Irrigation completed for request {request_id}: 10 s, 3.5 L", output.getvalue())
-        self.assertEqual(output.getvalue().count("Irrigation completed"), 1)
-        self.assertIn("Irrigation progress", output.getvalue())
+        self.assertIn(f"[WS_001] Request {request_id} completed: elapsed 10 s, total volume 3.5 L", output.getvalue())
+        self.assertEqual(output.getvalue().count("completed:"), 1)
+        self.assertIn("progress:", output.getvalue())
 
     def test_poll_worker_signals_ready_only_after_its_first_poll(self) -> None:
         class Worker:

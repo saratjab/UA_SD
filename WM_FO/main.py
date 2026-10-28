@@ -66,16 +66,22 @@ def _stop_poll_worker(poll_thread: threading.Thread | None,
     return True
 
 
-def _submit_and_wait(operator: FieldOperator, ws_id: str, duration: int, timeout: float) -> None:
-    request_id = operator.request_irrigation(ws_id, duration)
-    operator.wait_for_result(request_id, timeout)
+def _submit_and_wait(operator: FieldOperator, ws_id: str, duration: int | None,
+                     timeout: float | None, target_volume_liters: float | None = None) -> bool:
+    request_id = operator.request_irrigation(ws_id, duration, target_volume_liters)
+    return operator.wait_for_result(request_id, timeout)
 
 
 def _file_mode(operator: FieldOperator, path: str, timeout: float) -> None:
     requests = load_requests(path)
     for index, request in enumerate(requests):
         LOGGER.info("Processing file request %d of %d", index + 1, len(requests))
-        _submit_and_wait(operator, request["ws_id"], request["duration_seconds"], timeout)
+        duration = request.get("duration_seconds")
+        target = request.get("target_volume_liters")
+        # File runs advance only after a terminal result, including a denial.
+        # Indefinite mode therefore waits until the supported manual stop arrives.
+        if not _submit_and_wait(operator, request["ws_id"], duration, None, target):
+            raise RuntimeError(f"request {request.get('ws_id')} lost its terminal-result waiter; stopping file sequence")
         if index + 1 < len(requests):
             time.sleep(FILE_REQUEST_DELAY_SECONDS)
 
@@ -150,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
                     _interactive_mode(operator, config.request_timeout)
                 else:
                     _interactive_mode(operator, config.request_timeout)
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, RuntimeError) as exc:
                 LOGGER.error("Field Operator request failed: %s", exc)
                 exit_code = 2
             except KeyboardInterrupt:
