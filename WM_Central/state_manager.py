@@ -89,7 +89,14 @@ class StateManager:
         # ws_id -> the connection object that currently represents the station.
         # Opaque to this class; the socket layer decides what it is.
         self._connections: dict[str, Any] = {}
-        self._telemetry: dict[str, tuple[float, float]] = {}
+        self._telemetry: dict[str, tuple[float | None, float | None]] = {}
+
+        for irrigation in self._db.list_irrigations():
+            if irrigation.total_volume_l is not None:
+                self._telemetry[irrigation.ws_id] = (
+                    None,
+                    irrigation.total_volume_l,
+                )
 
     # ------------------------------------------------------------------
     # Connectivity (Monitor <-> Central socket)
