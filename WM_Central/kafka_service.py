@@ -169,14 +169,12 @@ class CentralKafkaService:
             outgoing = [self._outgoing(OPERATOR_EVENTS, "IRRIGATION_COMPLETED", payload, f"completed:{request_id}", operator_id=record.operator_id, ws_id=ws_id, request_id=request_id, key=record.operator_id)] if record.operator_id else []
             changed = self.db.end_irrigation(request_id, reason, duration_s=duration, total_volume_l=volume, ended_at=message["timestamp"], outgoing=outgoing)
             if changed:
-                latest = self.latest_telemetry.get(ws_id)
-                self.state.update_telemetry(ws_id, latest.flow_rate_lpm if latest and latest.request_id == request_id else 0.0, volume)
+                self.state.update_telemetry(ws_id, 0.0, volume)
             else:
                 self.db.add_terminal_measurements(
                     request_id, duration_s=duration, total_volume_l=volume, ended_at=message["timestamp"]
                 )
-                latest = self.latest_telemetry.get(ws_id)
-                self.state.update_telemetry(ws_id, latest.flow_rate_lpm if latest and latest.request_id == request_id else 0.0, volume)
+                self.state.update_telemetry(ws_id, 0.0, volume)
                 # A repeated completion after the terminal transition still needs
                 # to recreate/flush its stable notification if a prior publish failed.
                 for row in outgoing:

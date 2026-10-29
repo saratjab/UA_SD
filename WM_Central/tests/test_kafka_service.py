@@ -96,6 +96,9 @@ class CentralKafkaTests(DatabaseTestCase):
         complete = envelope("IRRIGATION_COMPLETED", {"end_reason": "TIME_LIMIT", "duration_seconds": 3.0, "accumulated_volume_liters": 0.3}, ws_id="WS_001", request_id="request-1")
         self.service.handle_engine_event(complete); self.service.handle_engine_event(complete)
         self.assertEqual(self.db.get_irrigation("request-1").status, IrrigationStatus.ENDED)  # type: ignore[union-attr]
+        station = next(view for view in self.state.snapshot() if view.ws_id == "WS_001")
+        self.assertEqual(station.flow_rate_lpm, 0.0)
+        self.assertEqual(station.accumulated_volume_liters, 0.3)
 
     def test_completion_after_central_restart_reaches_operator_once_with_final_measurements(self) -> None:
         request_id = "central-restart-request"
