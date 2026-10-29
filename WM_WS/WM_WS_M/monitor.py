@@ -28,6 +28,7 @@ class WateringStationMonitor:
         self.engine_server = engine_server
         self.sequence = 0
         self._fault_active = False
+        self._fault_sync_needed = True
         self._last_health_connection_usable = False
 
     def run(self) -> int:
@@ -146,15 +147,22 @@ class WateringStationMonitor:
         return reported
 
     def resolve_fault_if_needed(self) -> bool:
-        if not self._fault_active:
+        if not self._fault_active and not self._fault_sync_needed:
             return True
+
         try:
             resolved = self.central_client.report_fault_resolved(utc_timestamp())
         except (OSError, protocol.ProtocolError) as exc:
-            LOGGER.error("Failed to notify WM_Central that WM_WS_E recovered: %s", exc)
+            LOGGER.error(
+                "Failed to notify WM_Central that WM_WS_E recovered: %s",
+                exc,
+            )
             return False
+
         if resolved:
             self._fault_active = False
+            self._fault_sync_needed = False
+
         return resolved
 
     def report_fault(self, fault: str, details: str) -> bool:

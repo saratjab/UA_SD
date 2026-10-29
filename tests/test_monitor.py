@@ -102,6 +102,29 @@ class MonitorTests(unittest.TestCase):
             monitor_sock.close()
             engine_sock.close()
 
+    def test_health_ok_syncs_fault_state_after_monitor_restart(self) -> None:
+        # After restarting, the Monitor has no local active-fault flag,
+        # but Central may still have a previously reported fault.
+        self.assertFalse(self.monitor._fault_active)
+        self.assertTrue(self.monitor._fault_sync_needed)
+
+        monitor_sock, engine_sock = socket.socketpair()
+        try:
+            response = self._answer_one_health_check_in_thread(
+                engine_sock, "HEALTH_OK"
+            )
+
+            self.assertTrue(self.monitor.perform_health_check(monitor_sock, 1))
+            response["thread"].join(timeout=2)
+
+            # The Monitor must still notify Central that the Engine recovered.
+            self.assertEqual(len(self.central.resolutions), 1)
+            self.assertFalse(self.monitor._fault_active)
+            self.assertFalse(self.monitor._fault_sync_needed)
+        finally:
+            monitor_sock.close()
+            engine_sock.close()
+
     def test_health_timeout(self) -> None:
         monitor_sock, engine_sock = socket.socketpair()
         try:
