@@ -84,77 +84,64 @@ Watering Station's Monitor and Engine. Docker is used on both PCs. The Railway
 overlay below disables the local Central and Kafka services so there is one
 Central instance and one Kafka system.
 
-After creating the Railway services, attach Central's persistent volume
-at `/data`, and expose TCP proxies for Central's internal port `5000` and Kafka's
-client listener port `9092`. For the Railway service settings and Central start
-configuration, see
-[`railway-deployment.md`](railway-deployment.md). The values below are the
-placeholders for generated proxy endpoints; fill them from your own Railway
-environment after creating its TCP proxies:
+After creating the Railway services, attach Central's persistent volume at
+`/data` and expose TCP proxies for Central's internal port `5000` and Kafka's
+client listener port `9092`. For Railway service settings and Central startup,
+see [`railway-deployment.md`](railway-deployment.md).
+
+On **each lab PC**, copy `.env.railway.example` to `.env.railway`, enter the
+allocated Kafka and Central TCP proxy hosts/ports and generated Kafka SASL
+credentials, then place the public Kafka CA certificate at the configured
+`KAFKA_CA_CERT_PATH` (default `secrets/railway-kafka-ca.pem`, which is ignored
+by Git; custom paths should be outside the repository or under `secrets/`).
+Keep the same Railway endpoint and credentials on both PCs. The file sets the
+container CA path to `/run/secrets/kafka/ca.pem`; the Railway Compose overlay
+mounts the CA read-only in Central, both Engines, the topic initializer, and
+the Field Operator. The certificate must validate the exact public Kafka TCP
+proxy hostname. Keep the credentials in the ignored `.env.railway` file and
+never commit it.
+
+Run the one-time configuration and certificate check on both PCs:
 
 ```sh
-export KAFKA_HOST='<KAFKA_TCP_PROXY_HOST>'
-export KAFKA_PORT='<KAFKA_TCP_PROXY_PUBLIC_PORT>'
-export CENTRAL_HOST='<CENTRAL_TCP_PROXY_HOST>'
-export CENTRAL_PORT='<CENTRAL_TCP_PROXY_PUBLIC_PORT>'
-export KAFKA_SECURITY_PROTOCOL=SASL_SSL
-export KAFKA_REQUIRE_SECURITY=true
-export KAFKA_SASL_MECHANISM=PLAIN
-export KAFKA_SASL_USERNAME='<GENERATED_KAFKA_USERNAME>'
-read -rsp 'Kafka password: ' KAFKA_SASL_PASSWORD; echo
-export KAFKA_SASL_PASSWORD
-export KAFKA_SSL_CA_PEM="$(cat /secure/path/wm-kafka-ca.pem)"
+./scripts/setup-railway-local.sh
 ```
 
-Use the same Kafka settings on both PCs. The broker certificate must have SANs
-for both the private Railway hostname and the public TCP proxy hostname. The
-clients verify the CA chain and endpoint hostname; do not disable verification.
-The public hostname used here must be the exact public DNS SAN on the Kafka
-certificate (use a Railway custom TCP proxy domain if necessary).
-Keep the Kafka password in Railway secrets and enter it at the prompt. Do not
-commit it or put it in a shared `.env` file.
-
-On **each lab PC**, from the repository root, build the app image:
+On **PC1 (Field Operator)**, run an interactive operator when needed:
 
 ```sh
-docker build -t watermanagement-app:local .
+docker compose --env-file .env.railway \
+  -f docker-compose.local.yml -f docker-compose.railway.yml \
+  --profile operator run --build --rm -it fo
 ```
 
-On the **Field Operator PC**, run one command per operator (use a separate
-terminal for each interactive operator):
+On **PC2 (Watering Stations)**, start both station pairs with the standard
+command:
 
 ```sh
-docker compose -f docker-compose.local.yml -f docker-compose.railway.yml \
-  run --no-deps --rm -it fo
+docker compose --env-file .env.railway \
+  -f docker-compose.local.yml -f docker-compose.railway.yml \
+  up -d --build ws1-monitor ws1-engine ws2-monitor ws2-engine
 ```
 
-On the **Watering Station PC**, start both station pairs:
+Each Monitor reaches Railway Central using `CENTRAL_HOST` and `CENTRAL_PORT`.
+Engines and Field Operators reach Railway Kafka using `KAFKA_HOST` and
+`KAFKA_PORT`. The overlay disables the local Kafka and Central containers;
+using `docker-compose.local.yml` alone still runs the local PLAINTEXT mode.
+The TCP proxy placeholders are `<KAFKA_TCP_PROXY_HOST>`,
+`<KAFKA_TCP_PROXY_PUBLIC_PORT>`, `<CENTRAL_TCP_PROXY_HOST>`, and
+`<CENTRAL_TCP_PROXY_PUBLIC_PORT>`; replace them with the endpoints allocated
+in your Railway project.
 
-```sh
-docker compose -f docker-compose.local.yml -f docker-compose.railway.yml \
-  up -d ws1-monitor ws1-engine ws2-monitor ws2-engine
-```
-
-The Monitor connects to Railway Central using `CENTRAL_HOST` and
-`CENTRAL_PORT`. Each Engine connects to Railway Kafka using `KAFKA_HOST` and
-`KAFKA_PORT`, and connects to its matching Monitor over the local Docker
-network. Field Operators also connect to Railway Kafka. Keep these four
-environment variables set in the terminal that runs each Compose command (or
-put them in a `.env` file in the repository root on each PC).
-
-Create or expand the required topics on the external broker. Set the desired
-partition and replication values (defaults shown); use a replication factor no
-greater than the broker count. This safe-to-repeat command leaves existing
+Create or expand the required topics on the external broker when needed. The
+Railway overlay supplies the same SASL_SSL settings and read-only CA mount to
+the topic initializer. The command is safe to repeat; it leaves existing
 records and consumer offsets untouched and never reduces partition counts:
 
 ```sh
-export KAFKA_PARTITIONS=3
-export KAFKA_REPLICATION_FACTOR=1
-docker run --rm \
-  -v "$PWD/scripts/kafka-init-topics.sh:/kafka-init-topics.sh:ro" \
-  -e KAFKA_BOOTSTRAP_SERVERS="$KAFKA_HOST:$KAFKA_PORT" \
-  -e KAFKA_PARTITIONS -e KAFKA_REPLICATION_FACTOR \
-  apache/kafka:3.8.0 /bin/bash -ec /kafka-init-topics.sh
+docker compose --env-file .env.railway \
+  -f docker-compose.local.yml -f docker-compose.railway.yml \
+  --profile railway-disabled run --no-deps --rm kafka-init
 ```
 
 TCP Proxy addresses are for clients outside Railway. Services running inside
@@ -190,6 +177,5 @@ volumes mounted at `/engine-state`, with distinct per-station SQLite filenames.
 These volumes preserve interrupted-irrigation recovery data across Engine
 container recreation. Keep them when cleaning up the local stack; do not use
 `docker compose down -v` if recovery state must be retained. For Railway Kafka
-from either lab PC, set `KAFKA_REQUIRE_SECURITY=true` together with
-`KAFKA_SECURITY_PROTOCOL=SASL_SSL`, credentials, and the trusted CA. Local
+from either lab PC, use `.env.railway` and `docker-compose.railway.yml`. Local
 Compose defaults the guard to false and PLAINTEXT for the local-only broker.

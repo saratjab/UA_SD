@@ -17,13 +17,21 @@ TERMINAL_EVENTS = {"ACTIVATION_DENIED", "IRRIGATION_COMPLETED", "COMMAND_REJECTE
 
 
 class FieldOperator:
-    def __init__(self, operator_id: str, publisher: KafkaPublisher) -> None:
+    def __init__(
+        self,
+        operator_id: str,
+        publisher: KafkaPublisher,
+        *,
+        consumer_group_id: str | None = None,
+        station_id: str | None = None,
+    ) -> None:
         self.operator_id = operator_id
         self.publisher = publisher
         # Stable per-operator offsets let a restarted terminal resume events
         # produced after its last successful commit. Different operators keep
         # independent groups and therefore cannot consume one another's results.
-        self._consumer_group_id = f"wm-field-operator-{operator_id}-v1"
+        self._consumer_group_id = consumer_group_id or f"wm-field-operator-{operator_id}-v1"
+        self.station_id = station_id
         self._lock = threading.RLock()
         self._pending: dict[str, threading.Event] = {}
         self._results: dict[str, dict[str, Any]] = {}
@@ -56,7 +64,7 @@ class FieldOperator:
                 self._pending.pop(request_id, None)
             raise
         mode = (f"{duration_seconds} seconds" if duration_seconds is not None else
-                f"{target_volume_liters:g} litres" if target_volume_liters is not None else "manual stop")
+                f"{target_volume_liters:g} litres" if target_volume_liters is not None else "manual mode")
         print(f"[{ws_id}] Request {request_id} submitted ({mode}).", flush=True)
         return request_id
 
@@ -70,7 +78,10 @@ class FieldOperator:
             self._pending.pop(request_id, None)
             self._results.pop(request_id, None)
         if not finished:
-            print(f"Request {request_id} is still in progress; no final result arrived within {timeout:g} seconds.", flush=True)
+            if timeout is None:
+                print(f"Request {request_id} is still waiting for its final result.", flush=True)
+            else:
+                print(f"Request {request_id} is still in progress; no final result arrived within {timeout:g} seconds.", flush=True)
         return finished
 
     def handle_bytes(self, raw: bytes) -> bool:
@@ -80,6 +91,8 @@ class FieldOperator:
             LOGGER.warning("Discarding malformed operator event: %s", exc)
             return True
         if message.get("operator_id") != self.operator_id:
+            return True
+        if self.station_id is not None and message.get("ws_id") != self.station_id:
             return True
         request_id = message.get("request_id")
         event_type = message["event_type"]

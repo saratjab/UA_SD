@@ -25,6 +25,7 @@ class EngineKafkaService:
         self._target_volume_liters: float | None = None
         self._sequence = 0
         self._end_reason = "MANUAL_STOP"
+        self._pending_local_stops: set[str] = set()
         self._lock = threading.RLock()
         self._retry_stop = threading.Event()
         if str(state_path) != ":memory:":
@@ -107,6 +108,13 @@ class EngineKafkaService:
                 self._store.execute("INSERT INTO engine_requests VALUES (?, 'ACTIVE')", (request_id,))
             LOGGER.info("Engine irrigation accepted ws_id=%s request_id=%s", self.engine.config.ws_id, request_id)
             self._publish("IRRIGATION_STARTED", request_id, operator_id, {})
+            with self._lock:
+                stop_was_requested = request_id in self._pending_local_stops
+                self._pending_local_stops.discard(request_id)
+                if stop_was_requested:
+                    self._end_reason = "MANUAL_STOP"
+            if stop_was_requested:
+                self.engine.stop_irrigation()
         elif event_type in {"STOP_IRRIGATION", "BLOCK_WS"}:
             with self._lock:
                 if event_type == "STOP_IRRIGATION":
@@ -122,6 +130,27 @@ class EngineKafkaService:
         elif event_type == "ACTIVATE_WS":
             if not self.engine.failed: self.engine.blocked = False
         else: raise MessageValidationError("unsupported command")
+
+    def stop_local_irrigation(self, request_id: str) -> bool:
+        """Stop this request, or remember its stop until Central authorizes it."""
+        with self._lock:
+            if not request_id:
+                return False
+            if request_id != self._request_id:
+                self._pending_local_stops.add(request_id)
+                return True
+            self._end_reason = "MANUAL_STOP"
+        self.engine.stop_irrigation()
+        return True
+
+    @property
+    def active_request_id(self) -> str | None:
+        with self._lock:
+            return self._request_id
+
+    def clear_local_stop(self, request_id: str) -> None:
+        with self._lock:
+            self._pending_local_stops.discard(request_id)
 
     def on_telemetry(self, telemetry: IrrigationTelemetry) -> None:
         with self._lock:

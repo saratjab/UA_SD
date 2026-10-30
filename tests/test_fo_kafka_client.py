@@ -57,6 +57,42 @@ class FieldOperatorKafkaTests(unittest.TestCase):
         self.assertEqual(args[1]["payload"], {"target_volume_liters": 2.5})
         self.assertEqual(kwargs["key"], "WS_009")
 
+    def test_manual_activation_publishes_empty_payload_with_unique_request_id(self) -> None:
+        publisher = self.Publisher()
+        operator = FieldOperator("OP_002", publisher)  # type: ignore[arg-type]
+        first = operator.request_irrigation("WS_001")
+        second = operator.request_irrigation("WS_001")
+        self.assertNotEqual(first, second)
+        topic, message = publisher.records[0][0]
+        self.assertEqual(topic, "wm.activation.requests")
+        self.assertEqual(message["ws_id"], "WS_001")
+        self.assertEqual(message["operator_id"], "OP_002")
+        self.assertEqual(message["request_id"], first)
+        self.assertEqual(message["payload"], {})
+
+    def test_local_event_consumer_filters_by_station_and_operator(self) -> None:
+        operator = FieldOperator("OP_002", self.Publisher(), station_id="WS_001")  # type: ignore[arg-type]
+        request_id = operator.request_irrigation("WS_001")
+        event = envelope("IRRIGATION_TELEMETRY", {"sequence": 1, "flow_rate_lpm": 6.0,
+                            "accumulated_volume_liters": 0.1, "duration_seconds": 1.0},
+                         ws_id="WS_002", operator_id="OP_002", request_id=request_id)
+        with mock.patch("WM_FO.kafka_client.show_event") as display:
+            operator.handle_bytes(encode(event))
+        display.assert_not_called()
+        self.assertFalse(operator._pending[request_id].is_set())
+
+    def test_local_consumer_group_can_be_station_specific(self) -> None:
+        operator = FieldOperator("OP_002", self.Publisher(),
+                                 consumer_group_id="wm-ws-local-WS_001-v1",
+                                 station_id="WS_001")  # type: ignore[arg-type]
+        seen = {}
+        def factory(_bootstrap, group_id, _topics, _handler, consumer, **_kwargs):
+            seen["group"] = group_id
+            return object()
+        with mock.patch("WM_FO.kafka_client.KafkaWorker", side_effect=factory):
+            operator.worker("localhost", consumer=object())
+        self.assertEqual(seen["group"], "wm-ws-local-WS_001-v1")
+
     def test_field_operator_rejects_mixed_modes(self) -> None:
         operator = FieldOperator("OP_001", self.Publisher())  # type: ignore[arg-type]
         with self.assertRaisesRegex(ValueError, "not both"):

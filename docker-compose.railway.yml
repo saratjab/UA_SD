@@ -1,18 +1,38 @@
 # Overlay for the assignment's lab PCs. Central, its database, and Kafka run
 # on Railway; lab machines run only Field Operators or Watering Stations.
+x-kafka-ca-volume: &kafka-ca-volume
+  - type: bind
+    source: ${KAFKA_CA_CERT_PATH:?Set KAFKA_CA_CERT_PATH in .env.railway}
+    target: /run/secrets/kafka/ca.pem
+    read_only: true
+    bind:
+      create_host_path: false
+
 services:
   kafka:
     profiles: [railway-disabled]
 
   kafka-init:
     profiles: [railway-disabled]
+    depends_on: !reset []
+    volumes: *kafka-ca-volume
 
   central:
     profiles: [railway-disabled]
     depends_on: !reset []
+    volumes: *kafka-ca-volume
 
   ws1-monitor:
     depends_on: !reset []
 
+  ws1-engine:
+    volumes: *kafka-ca-volume
+
   ws2-monitor:
     depends_on: !reset []
+
+  ws2-engine:
+    volumes: *kafka-ca-volume
+
+  fo:
+    volumes: *kafka-ca-volume

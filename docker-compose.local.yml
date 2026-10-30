@@ -2,6 +2,9 @@ name: watermanagement-local
 
 x-app-defaults: &app-defaults
   image: watermanagement-app:local
+  build:
+    context: .
+    dockerfile: Dockerfile
   init: true
   restart: unless-stopped
   environment: &kafka-client-environment
@@ -10,7 +13,7 @@ x-app-defaults: &app-defaults
     KAFKA_SASL_MECHANISM: "${KAFKA_SASL_MECHANISM:-}"
     KAFKA_SASL_USERNAME: "${KAFKA_SASL_USERNAME:-}"
     KAFKA_SASL_PASSWORD: "${KAFKA_SASL_PASSWORD:-}"
-    KAFKA_SSL_CA_LOCATION: "${KAFKA_SSL_CA_LOCATION:-}"
+    KAFKA_SSL_CA_LOCATION: "${KAFKA_SSL_CA_LOCATION:-/run/secrets/kafka/ca.pem}"
     KAFKA_SSL_CA_PEM: "${KAFKA_SSL_CA_PEM:-}"
   networks:
     - watermanagement
@@ -58,7 +61,8 @@ services:
     entrypoint: ["/bin/bash", "-ec"]
     command: ["/kafka-init-topics.sh"]
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BROKER_NAME:-kafka}:29092
+      <<: *kafka-client-environment
+      KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_HOST:-${KAFKA_BROKER_NAME:-kafka}}:${KAFKA_PORT:-29092}"
       KAFKA_PARTITIONS: "${KAFKA_PARTITIONS:-}"
       KAFKA_REPLICATION_FACTOR: "${KAFKA_REPLICATION_FACTOR:-1}"
     volumes:
@@ -72,9 +76,6 @@ services:
 
   central:
     <<: *app-defaults
-    build:
-      context: .
-      dockerfile: Dockerfile
     container_name: wm-central
     command:
       - python
@@ -149,6 +150,8 @@ services:
 
   ws1-engine:
     <<: *app-defaults
+    stdin_open: true
+    tty: true
     command:
       - python
       - -m
@@ -165,6 +168,8 @@ services:
       - "${WS1_ENGINE_PORT:-6001}"
       - --state-path
       - "/engine-state/.wm_ws_e_${WS1_ID:-WS_001}.sqlite3"
+      - --local-operator-id
+      - "${WS1_LOCAL_OPERATOR_ID:-OP_002}"
     volumes:
       - ws1-engine-state:/engine-state
     depends_on:
@@ -197,6 +202,8 @@ services:
 
   ws2-engine:
     <<: *app-defaults
+    stdin_open: true
+    tty: true
     command:
       - python
       - -m
@@ -213,6 +220,8 @@ services:
       - "${WS2_ENGINE_PORT:-6002}"
       - --state-path
       - "/engine-state/.wm_ws_e_${WS2_ID:-WS_002}.sqlite3"
+      - --local-operator-id
+      - "${WS2_LOCAL_OPERATOR_ID:-OP_003}"
     volumes:
       - ws2-engine-state:/engine-state
     depends_on:

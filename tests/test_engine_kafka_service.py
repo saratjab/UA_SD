@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import time
+import threading
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -14,6 +15,7 @@ from WM_WS.WM_WS_E.flow_meter import FlowMeter
 from WM_WS.WM_WS_E.irrigation import IrrigationController
 from WM_WS.WM_WS_E.kafka_service import EngineKafkaService
 from WM_WS.WM_WS_E.valve import SolenoidValve
+from WM_WS.WM_WS_E.main import start_command_thread
 
 
 class FakePublisher:
@@ -61,6 +63,11 @@ class EngineKafkaTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"ENGINE_STATE_PATH": "/engine-state/from-env.sqlite3"}, clear=True):
             from_env = parse_args(arguments)
         self.assertEqual(from_env.state_path, "/engine-state/from-env.sqlite3")
+        local = parse_args(arguments + ["--local-operator-id", "OP_002"])
+        self.assertEqual(local.local_operator_id, "OP_002")
+        with mock.patch.dict("os.environ", {"LOCAL_OPERATOR_ID": "OP_003"}, clear=True):
+            from_env_operator = parse_args(arguments)
+        self.assertEqual(from_env_operator.local_operator_id, "OP_003")
 
     def test_engine_service_creates_parent_for_persistent_state_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -68,6 +75,26 @@ class EngineKafkaTests(unittest.TestCase):
             service = EngineKafkaService(self.engine(), FakePublisher(), path)  # type: ignore[arg-type]
             service.close()
             self.assertTrue(path.is_file())
+
+    def test_station_menu_starts_and_stops_through_central_request_client(self) -> None:
+        engine = self.engine()
+        operator = mock.Mock()
+        operator.operator_id = "OP_002"
+        operator.request_irrigation.return_value = "manual-request"
+        terminal = threading.Event()
+        operator.wait_for_result.side_effect = lambda *_args: terminal.wait(1)
+        service = mock.Mock()
+        service.active_request_id = None
+        def stop(_request_id):
+            terminal.set()
+            return True
+        service.stop_local_irrigation.side_effect = stop
+        with mock.patch("builtins.input", side_effect=["m", "s", "q"]):
+            thread = start_command_thread(engine, operator, service)
+            thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        operator.request_irrigation.assert_called_once_with("WS_001")
+        service.stop_local_irrigation.assert_called_once_with("manual-request")
 
     def test_dispatches_targeted_start_and_ignores_other_station(self) -> None:
         valve = SolenoidValve()
@@ -156,6 +183,65 @@ class EngineKafkaTests(unittest.TestCase):
         self.assertTrue(engine.irrigation.wait_until_finished(1))
         completed = [m for _, m in publisher.records if m["event_type"] == "IRRIGATION_COMPLETED"][0]
         self.assertEqual(completed["payload"]["end_reason"], "CENTRAL_STOP")
+
+    def test_local_menu_stop_only_stops_matching_manual_request(self) -> None:
+        engine = self.engine(IrrigationController("WS_001", SolenoidValve(), FlowMeter(1), .01))
+        publisher = FakePublisher()
+        service = EngineKafkaService(engine, publisher)  # type: ignore[arg-type]
+        service.handle_command(envelope(
+            "START_IRRIGATION", {}, ws_id="WS_001",
+            operator_id="OP_002", request_id="local-manual",
+        ))
+        time.sleep(.03)
+        self.assertEqual(engine.irrigation.state.value, "WATERING")
+        self.assertTrue(service.stop_local_irrigation("another-request"))
+        self.assertEqual(engine.irrigation.state.value, "WATERING")
+        service.clear_local_stop("another-request")
+        self.assertTrue(service.stop_local_irrigation("local-manual"))
+        self.assertTrue(engine.irrigation.wait_until_finished(1))
+        completed = [
+            message for _, message in publisher.records
+            if message["event_type"] == "IRRIGATION_COMPLETED"
+        ][0]
+        self.assertEqual(completed["payload"]["end_reason"], "MANUAL_STOP")
+
+    def test_local_stop_during_authorization_waits_for_that_authorized_start(self) -> None:
+        engine = self.engine(IrrigationController("WS_001", SolenoidValve(), FlowMeter(1), .01))
+        publisher = FakePublisher()
+        service = EngineKafkaService(engine, publisher)  # type: ignore[arg-type]
+        self.assertTrue(service.stop_local_irrigation("waiting-for-central"))
+        self.assertEqual(engine.irrigation.state.value, "IDLE")
+        service.handle_command(envelope("START_IRRIGATION", {}, ws_id="WS_001",
+                                        operator_id="OP_002", request_id="waiting-for-central"))
+        self.assertTrue(engine.irrigation.wait_until_finished(1))
+        completed = [m for _, m in publisher.records if m["event_type"] == "IRRIGATION_COMPLETED"]
+        self.assertEqual(completed[0]["payload"]["end_reason"], "MANUAL_STOP")
+
+    def test_local_menu_stops_irrigation_started_by_field_operator(self) -> None:
+        engine = self.engine(IrrigationController("WS_001", SolenoidValve(), FlowMeter(1), .01))
+        publisher = FakePublisher()
+        service = EngineKafkaService(engine, publisher)  # type: ignore[arg-type]
+        service.handle_command(envelope("START_IRRIGATION", {}, ws_id="WS_001",
+                                        operator_id="OP_001", request_id="field-operator-request"))
+        time.sleep(.03)
+        self.assertTrue(service.stop_local_irrigation("field-operator-request"))
+        self.assertTrue(engine.irrigation.wait_until_finished(1))
+        completed = [m for _, m in publisher.records if m["event_type"] == "IRRIGATION_COMPLETED"]
+        self.assertEqual(completed[0]["payload"]["end_reason"], "MANUAL_STOP")
+
+    def test_stale_pending_manual_stop_does_not_stop_later_authorized_cycle(self) -> None:
+        engine = self.engine(IrrigationController("WS_001", SolenoidValve(), FlowMeter(1), .01))
+        service = EngineKafkaService(engine, FakePublisher())  # type: ignore[arg-type]
+        self.assertTrue(service.stop_local_irrigation("old-request"))
+        service.handle_command(envelope("START_IRRIGATION", {}, ws_id="WS_001",
+                                        operator_id="OP", request_id="new-request"))
+        time.sleep(.03)
+        self.assertEqual(engine.irrigation.state.value, "WATERING")
+        service.handle_command(envelope("STOP_IRRIGATION", {}, ws_id="WS_001", request_id="old-request"))
+        time.sleep(.03)
+        self.assertEqual(engine.irrigation.state.value, "WATERING")
+        service.stop_local_irrigation("new-request")
+        self.assertTrue(engine.irrigation.wait_until_finished(1))
 
     def test_monitor_disconnect_completion_uses_contract_reason(self) -> None:
         engine = self.engine(IrrigationController("WS_001", SolenoidValve(), FlowMeter(6), .01))
