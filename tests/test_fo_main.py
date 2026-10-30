@@ -60,16 +60,48 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
 
     def test_q_at_station_prompt_exits_without_submitting(self) -> None:
         operator = mock.Mock()
+        operator.request_available_stations.return_value = [
+            {"station_id": "WS_009", "location": "Orchard"},
+        ]
         with mock.patch("builtins.input", side_effect=["  Q  "]):
             with redirect_stdout(io.StringIO()):
                 _interactive_mode(operator, timeout=5)
         operator.request_irrigation.assert_not_called()
+        operator.request_available_stations.assert_called_once_with(5)
 
     def test_q_at_duration_prompt_exits_without_submitting(self) -> None:
         operator = mock.Mock()
+        operator.request_available_stations.return_value = [
+            {"station_id": "WS_001", "location": "North Garden"},
+        ]
         with mock.patch("builtins.input", side_effect=["WS_001", "q"]):
             with redirect_stdout(io.StringIO()):
                 _interactive_mode(operator, timeout=5)
+        operator.request_irrigation.assert_not_called()
+
+    def test_menu_shows_current_station_ids_and_locations_before_selection(self) -> None:
+        operator = mock.Mock()
+        operator.request_available_stations.side_effect = [
+            [{"station_id": "WS_004", "location": "West Orchard"}],
+            [],
+        ]
+        output = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["WS_004", "12", "q"]) as input_mock, \
+                redirect_stdout(output):
+            _interactive_mode(operator, timeout=5)
+        rendered = output.getvalue()
+        self.assertLess(rendered.index("WS_004"), rendered.index("West Orchard"))
+        self.assertEqual(input_mock.call_args_list[0].args[0], "Enter station ID (or q to quit): ")
+        self.assertIn("West Orchard", rendered)
+        self.assertIn("No Watering Stations are currently available", rendered)
+        operator.request_irrigation.assert_called_once_with("WS_004", 12, None)
+
+    def test_discovery_timeout_has_controlled_retry_prompt(self) -> None:
+        operator = mock.Mock()
+        operator.request_available_stations.side_effect = [TimeoutError("Central timeout")]
+        with mock.patch("builtins.input", side_effect=["q"]), redirect_stdout(io.StringIO()) as output:
+            _interactive_mode(operator, timeout=0.01)
+        self.assertIn("Could not load available stations: Central timeout", output.getvalue())
         operator.request_irrigation.assert_not_called()
 
     def test_no_ws_id_q_stops_poll_thread_before_closing_consumer(self) -> None:
@@ -95,6 +127,9 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
         worker.close.side_effect = close_worker
         operator = mock.Mock()
         operator.worker.return_value = worker
+        operator.request_available_stations.return_value = [
+            {"station_id": "WS_001", "location": "North Garden"},
+        ]
 
         class TrackingThread(REAL_THREAD):
             started = []
@@ -106,7 +141,7 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
         TrackingThread.started = []
 
         def enter_q(prompt):
-            self.assertEqual(prompt, "WS ID: ")
+            self.assertEqual(prompt, "Enter station ID (or q to quit): ")
             self.assertTrue(poll_entered.wait(timeout=1))
             self.assertTrue(worker.poll_in_progress)
             return "q"
@@ -120,7 +155,7 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
             self.assertEqual(main(["--kafka-host", "kafka", "--kafka-port", "29092",
                                    "--operator-id", "OP_001"]), 0)
 
-        input_mock.assert_called_once_with("WS ID: ")
+        input_mock.assert_called_once_with("Enter station ID (or q to quit): ")
         operator.request_irrigation.assert_not_called()
         worker.close.assert_called_once()
         self.assertFalse(worker.thread_alive_at_close)
@@ -259,6 +294,9 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
         worker.wait_until_assigned.return_value = True
         operator = mock.Mock()
         operator.worker.return_value = worker
+        operator.request_available_stations.return_value = [
+            {"station_id": "WS_001", "location": "North Garden"},
+        ]
         return worker, operator
 
     @staticmethod

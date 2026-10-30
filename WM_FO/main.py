@@ -91,10 +91,36 @@ def _is_quit(value: str) -> bool:
 
 
 def _interactive_mode(operator: FieldOperator, timeout: float) -> None:
-    print("Enter a station ID and irrigation duration in seconds. Type 'q' to quit.")
+    print("Select an available station and enter an irrigation duration in seconds. Type 'q' to quit.")
     while True:
         try:
-            ws_id = input("WS ID: ").strip()
+            stations = operator.request_available_stations(timeout)
+        except (TimeoutError, OSError, RuntimeError) as exc:
+            print(f"Could not load available stations: {exc}")
+            try:
+                retry = input("Press Enter to retry or q to quit: ").strip()
+            except EOFError:
+                return
+            if _is_quit(retry):
+                return
+            continue
+
+        print("========================================")
+        print("       AVAILABLE WATERING STATIONS")
+        print("========================================")
+        for station in stations:
+            print(f"{station['station_id']:<12} {station['location']:<24} AVAILABLE")
+        if not stations:
+            print("No Watering Stations are currently available.")
+            try:
+                retry = input("Press Enter to refresh or q to quit: ").strip()
+            except EOFError:
+                return
+            if _is_quit(retry):
+                return
+            continue
+        try:
+            ws_id = input("Enter station ID (or q to quit): ").strip()
         except EOFError:
             return
         if _is_quit(ws_id):

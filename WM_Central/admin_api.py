@@ -11,7 +11,9 @@ import hmac
 import json
 import logging
 import math
+import os
 import socket
+import sys
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -132,6 +134,7 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
                         "location": view.location,
                         "status": view.status.value,
                         "admin_state": view.admin_state.value,
+                        "operator_id": view.operator_id,
                         "flow_rate_lpm": view.flow_rate_lpm,
                         "total_volume_liters": view.accumulated_volume_liters,
                         "fault": view.fault,
@@ -327,15 +330,38 @@ def _execute_command(owner: CentralAdminServer, body: dict[str, Any], idempotenc
     return {"results": results}, HTTPStatus.OK if accepted_any else HTTPStatus.CONFLICT
 
 
-def format_status_response(value: dict[str, Any]) -> str:
+STATUS_ANSI = {
+    "AVAILABLE": "32",       # green
+    "WATERING": "1;32",      # bold green; marker below remains visible if blink is unsupported
+    "LEAK": "31",            # red
+    "OUT_OF_SERVICE": "38;5;208",  # orange
+    "DISCONNECTED": "90",    # gray
+}
+
+
+def format_status_response(value: dict[str, Any], *, color: bool | None = None) -> str:
     """Human-readable status for the standalone interactive admin client."""
+    if color is None:
+        color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    color = bool(color) and "NO_COLOR" not in os.environ
     stations = value.get("stations", [])
-    lines = ["STATION     LOCATION                 STATUS             FLOW L/M    TOTAL L  REQUEST ID"]
+    lines = ["STATION     LOCATION                 STATUS             FLOW L/M    TOTAL L  OPERATOR   REQUEST ID"]
     for row in stations:
+        status = "Out of Service" if row["status"] == "OUT_OF_SERVICE" else row["status"]
+        if row["status"] == "WATERING":
+            status = "● " + status
+        visible_status = status
+        if color and row["status"] in STATUS_ANSI:
+            status = f"\033[{STATUS_ANSI[row['status']]}m{status}\033[0m"
+            status_column = status + " " * max(0, 18 - len(visible_status))
+        else:
+            status_column = f"{status:<18}"
+        operator_id = row.get("operator_id") if row["status"] == "WATERING" else None
         lines.append(
-            f"{row['station_id']:<11} {row['location']:<24} {row['status']:<18} "
+            f"{row['station_id']:<11} {row['location']:<24} {status_column} "
             f"{row['flow_rate_lpm'] if row['flow_rate_lpm'] is not None else '-':>8} "
             f"{row['total_volume_liters'] if row['total_volume_liters'] is not None else '-':>9}  "
+            f"{operator_id or '-':<10} "
             f"{row['request_id'] or '-'}"
         )
         if row["fault"]:

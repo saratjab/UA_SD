@@ -70,6 +70,80 @@ class FieldOperatorKafkaTests(unittest.TestCase):
         self.assertEqual(message["request_id"], first)
         self.assertEqual(message["payload"], {})
 
+    def test_station_discovery_publishes_request_and_correlates_matching_response(self) -> None:
+        publisher = self.Publisher()
+        operator = FieldOperator("OP_002", publisher)  # type: ignore[arg-type]
+
+        def publish(_topic, request, *, key=None):
+            self.assertEqual(_topic, "wm.activation.requests")
+            self.assertEqual(key, "OP_002")
+            self.assertEqual(request["event_type"], "AVAILABLE_STATIONS_REQUEST")
+            self.assertEqual(request["operator_id"], "OP_002")
+            self.assertTrue(request["request_id"])
+            self.assertEqual(request["payload"], {})
+            response = envelope(
+                "AVAILABLE_STATIONS_RESPONSE",
+                {"stations": [{"station_id": "WS_009", "location": "Orchard"}], "error": None},
+                operator_id="OP_002", request_id=request["request_id"],
+            )
+            operator.handle_bytes(encode(response))
+
+        publisher.publish = publish
+        self.assertEqual(operator.request_available_stations(timeout=0.1), [
+            {"station_id": "WS_009", "location": "Orchard"},
+        ])
+
+    def test_other_operator_and_irrigation_events_do_not_complete_discovery(self) -> None:
+        publisher = self.Publisher()
+        operator = FieldOperator("OP_002", publisher)  # type: ignore[arg-type]
+        result = []
+        failures = []
+
+        def discover():
+            try:
+                result.extend(operator.request_available_stations(timeout=2.0))
+            except Exception as exc:  # captured for assertion in the test thread
+                failures.append(exc)
+
+        thread = threading.Thread(target=discover)
+        thread.start()
+        while not publisher.records:
+            threading.Event().wait(0.001)
+        request = publisher.records[0][0][1]
+        unrelated = envelope("IRRIGATION_COMPLETED", {}, operator_id="OP_002",
+                             ws_id="WS_001", request_id="irrigation-request")
+        wrong_operator = envelope("AVAILABLE_STATIONS_RESPONSE", {"stations": [], "error": None},
+                                  operator_id="OP_003", request_id=request["request_id"])
+        response = envelope("AVAILABLE_STATIONS_RESPONSE",
+                            {"stations": [], "error": None},
+                            operator_id="OP_002", request_id=request["request_id"])
+        with mock.patch("WM_FO.kafka_client.show_event") as show_event:
+            operator.handle_bytes(encode(unrelated))
+            operator.handle_bytes(encode(wrong_operator))
+            self.assertTrue(thread.is_alive())
+            operator.handle_bytes(encode(response))
+            show_event.assert_called_once_with(unrelated)
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(result, [])
+
+    def test_station_discovery_timeout_is_controlled_and_cleans_pending_state(self) -> None:
+        operator = FieldOperator("OP_002", self.Publisher())  # type: ignore[arg-type]
+        with self.assertRaisesRegex(TimeoutError, "did not return"):
+            operator.request_available_stations(timeout=0)
+        self.assertEqual(operator._station_discoveries, {})
+
+    def test_station_discovery_publish_failure_cleans_pending_state(self) -> None:
+        class BrokenPublisher:
+            def publish(self, *_args, **_kwargs):
+                raise OSError("broker unavailable")
+
+        operator = FieldOperator("OP_002", BrokenPublisher())  # type: ignore[arg-type]
+        with self.assertRaisesRegex(OSError, "broker unavailable"):
+            operator.request_available_stations()
+        self.assertEqual(operator._station_discoveries, {})
+
     def test_local_event_consumer_filters_by_station_and_operator(self) -> None:
         operator = FieldOperator("OP_002", self.Publisher(), station_id="WS_001")  # type: ignore[arg-type]
         request_id = operator.request_irrigation("WS_001")

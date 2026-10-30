@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from common.kafka_contract import decode, envelope
+from common.kafka_contract import decode, encode, envelope
 from WM_Central.kafka_service import CentralKafkaService
 from WM_Central.models import DenyReason, IrrigationStatus
 from WM_Central.state_manager import StateManager
@@ -12,11 +12,13 @@ from .helpers import DatabaseTestCase
 class FakePublisher:
     def __init__(self) -> None:
         self.records: list[tuple[str, dict]] = []
+        self.keys: list[tuple[str, str | None]] = []
         self.fail_topics: set[str] = set()
     def publish(self, topic: str, message: dict, *, key: str | None = None) -> None:
         if topic in self.fail_topics:
             raise RuntimeError("simulated broker outage")
         self.records.append((topic, message))
+        self.keys.append((topic, key))
 
 
 class CentralKafkaTests(DatabaseTestCase):
@@ -86,6 +88,52 @@ class CentralKafkaTests(DatabaseTestCase):
         self.service.handle_activation(request)
         command = next(m for topic, m in self.publisher.records if topic == "wm.ws.commands" and m.get("request_id") == "manual-mode")
         self.assertEqual(command["payload"], {})
+
+    def test_station_discovery_returns_only_available_stations_to_requesting_operator(self) -> None:
+        # WS_001 remains available; the other known stations cover every
+        # non-available state returned by StateManager.snapshot().
+        self.state.register("WS_WATERING", "Watering Garden", object())
+        watering_request = envelope("ACTIVATION_REQUEST", {}, ws_id="WS_WATERING",
+                                    operator_id="OP_001", request_id="watering-request")
+        self.service.handle_activation(watering_request)
+        self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {},
+                                                  ws_id="WS_WATERING", request_id="watering-request"))
+
+        self.state.register("WS_LEAK", "Leaking Garden", object())
+        self.state.report_fault("WS_LEAK", self.state._connections["WS_LEAK"], "leak", "pipe")
+        self.state.register("WS_BLOCKED", "Blocked Garden", object())
+        self.service.issue_station_command("BLOCK_WS", "WS_BLOCKED")
+        self.state.register("WS_OFFLINE", "Offline Garden", object())
+        self.state.disconnect("WS_OFFLINE", self.state._connections["WS_OFFLINE"])
+
+        request = envelope("AVAILABLE_STATIONS_REQUEST", {},
+                           operator_id="OP_002", request_id="station-list-42")
+        self.service.handle_activation_bytes(encode(request))
+        topic, response = next(
+            row for row in self.publisher.records
+            if row[0] == "wm.operator.events" and row[1]["event_type"] == "AVAILABLE_STATIONS_RESPONSE"
+        )
+        self.assertEqual(topic, "wm.operator.events")
+        self.assertIn((topic, "OP_002"), self.publisher.keys)
+        self.assertEqual(response["operator_id"], "OP_002")
+        self.assertEqual(response["request_id"], "station-list-42")
+        self.assertEqual(response["payload"], {
+            "stations": [{"station_id": "WS_001", "location": "North"}],
+            "error": None,
+        })
+
+    def test_station_discovery_rejects_inactive_operator(self) -> None:
+        self.db.add_operator("OP_002", "Two", active=False)
+        request = envelope("AVAILABLE_STATIONS_REQUEST", {},
+                           operator_id="OP_002", request_id="inactive-list")
+        self.service.handle_available_stations_request(request)
+        response = next(
+            row[1] for row in self.publisher.records
+            if row[0] == "wm.operator.events" and row[1]["event_type"] == "AVAILABLE_STATIONS_RESPONSE"
+        )
+        self.assertEqual(response["operator_id"], "OP_002")
+        self.assertEqual(response["request_id"], "inactive-list")
+        self.assertEqual(response["payload"], {"stations": [], "error": "OPERATOR_INACTIVE"})
 
     def test_telemetry_replaces_cumulative_measurement_and_completion_is_idempotent(self) -> None:
         self.service.handle_activation(self.request())

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import threading
 from types import SimpleNamespace
@@ -11,8 +12,8 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-from common.kafka_contract import WS_COMMANDS
-from WM_Central.admin_api import CentralAdminServer
+from common.kafka_contract import WS_COMMANDS, envelope
+from WM_Central.admin_api import CentralAdminServer, format_status_response
 from WM_Central.admin_client import AdminClientError, CentralAdminClient, _menu_command
 from WM_Central.config import parse_args
 from WM_Central.kafka_service import CentralKafkaService
@@ -123,6 +124,48 @@ class CentralAdminApiTests(DatabaseTestCase):
         self.assertEqual(code, 200)
         self.assertEqual([row["station_id"] for row in response["stations"]], ["WS_001", "WS_002"])
         self.assertEqual(response["stations"][0]["status"], "AVAILABLE")
+        self.assertIsNone(response["stations"][0]["operator_id"])
+
+    def test_status_returns_operator_id_during_watering(self) -> None:
+        request_id = self.service.start_irrigation("WS_001", 10, "OP_001")
+        self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {},
+                                                  ws_id="WS_001", request_id=request_id))
+        code, response = self.call("GET", "/v1/stations")
+        row = next(row for row in response["stations"] if row["station_id"] == "WS_001")
+        self.assertEqual(code, 200)
+        self.assertEqual(row["operator_id"], "OP_001")
+
+    def test_status_formatter_renders_all_status_colors_and_captions(self) -> None:
+        rows = [
+            {"station_id": "WS_A", "location": "A", "status": "AVAILABLE", "flow_rate_lpm": None,
+             "total_volume_liters": None, "operator_id": None, "request_id": None, "fault": None},
+            {"station_id": "WS_W", "location": "W", "status": "WATERING", "flow_rate_lpm": 6.0,
+             "total_volume_liters": 1.2, "operator_id": "OP_003", "request_id": "r", "fault": None},
+            {"station_id": "WS_L", "location": "L", "status": "LEAK", "flow_rate_lpm": None,
+             "total_volume_liters": None, "operator_id": None, "request_id": None, "fault": "pipe leak"},
+            {"station_id": "WS_O", "location": "O", "status": "OUT_OF_SERVICE", "flow_rate_lpm": None,
+             "total_volume_liters": None, "operator_id": None, "request_id": None, "fault": None},
+            {"station_id": "WS_D", "location": "D", "status": "DISCONNECTED", "flow_rate_lpm": None,
+             "total_volume_liters": None, "operator_id": None, "request_id": None, "fault": None},
+        ]
+        plain = format_status_response({"stations": rows}, color=False)
+        self.assertNotIn("\033[", plain)
+        self.assertIn("Out of Service", plain)
+        self.assertIn("OP_003", plain)
+        self.assertIn("● WATERING", plain)
+        self.assertIn("pipe leak", plain)
+        self.assertIn("-", plain)
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            colored = format_status_response({"stations": rows}, color=True)
+        for ansi in ("\033[32m", "\033[1;32m", "\033[31m", "\033[38;5;208m", "\033[90m"):
+            self.assertIn(ansi, colored)
+        with mock.patch.dict(os.environ, {"NO_COLOR": ""}):
+            no_color = format_status_response({"stations": rows}, color=True)
+        self.assertNotIn("\033[", no_color)
+        with mock.patch("WM_Central.admin_api.sys.stdout", io.StringIO()):
+            redirected = format_status_response({"stations": rows})
+        self.assertNotIn("\033[", redirected)
 
     def test_invalid_action_station_mode_and_unknown_fields_are_rejected(self) -> None:
         cases = [

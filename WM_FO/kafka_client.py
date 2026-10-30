@@ -35,6 +35,7 @@ class FieldOperator:
         self._lock = threading.RLock()
         self._pending: dict[str, threading.Event] = {}
         self._results: dict[str, dict[str, Any]] = {}
+        self._station_discoveries: dict[str, tuple[threading.Event, dict[str, Any] | None]] = {}
         self._shown_terminal_request_ids: set[str] = set()
 
     def worker(self, bootstrap: str, consumer: Any | None = None) -> KafkaWorker:
@@ -68,6 +69,38 @@ class FieldOperator:
         print(f"[{ws_id}] Request {request_id} submitted ({mode}).", flush=True)
         return request_id
 
+    def request_available_stations(self, timeout: float = 10.0) -> list[dict[str, str]]:
+        """Request a fresh station snapshot from Central and wait for its reply."""
+        request_id = str(uuid4())
+        completed = threading.Event()
+        with self._lock:
+            self._station_discoveries[request_id] = (completed, None)
+        message = envelope("AVAILABLE_STATIONS_REQUEST", {},
+                           operator_id=self.operator_id, request_id=request_id)
+        try:
+            self.publisher.publish(ACTIVATION_REQUESTS, message, key=self.operator_id)
+            if not completed.wait(timeout):
+                raise TimeoutError("Central did not return the available station list in time")
+            with self._lock:
+                response = self._station_discoveries[request_id][1]
+            if response is None:
+                raise RuntimeError("Central returned an invalid station discovery response")
+            error = response["payload"].get("error")
+            if error:
+                raise RuntimeError(f"Central could not list stations: {error}")
+            stations = response["payload"].get("stations")
+            if not isinstance(stations, list) or any(
+                not isinstance(station, dict)
+                or not isinstance(station.get("station_id"), str)
+                or not isinstance(station.get("location"), str)
+                for station in stations
+            ):
+                raise RuntimeError("Central returned an invalid station list")
+            return stations
+        finally:
+            with self._lock:
+                self._station_discoveries.pop(request_id, None)
+
     def wait_for_result(self, request_id: str, timeout: float | None) -> bool:
         with self._lock:
             completed = self._pending.get(request_id)
@@ -92,10 +125,19 @@ class FieldOperator:
             return True
         if message.get("operator_id") != self.operator_id:
             return True
-        if self.station_id is not None and message.get("ws_id") != self.station_id:
-            return True
         request_id = message.get("request_id")
         event_type = message["event_type"]
+        if event_type == "AVAILABLE_STATIONS_RESPONSE":
+            if not isinstance(request_id, str):
+                return True
+            with self._lock:
+                discovery = self._station_discoveries.get(request_id)
+                if discovery is not None:
+                    self._station_discoveries[request_id] = (discovery[0], message)
+                    discovery[0].set()
+            return True
+        if self.station_id is not None and message.get("ws_id") != self.station_id:
+            return True
         with self._lock:
             waiter = self._pending.get(request_id) if isinstance(request_id, str) else None
             is_terminal = isinstance(request_id, str) and event_type in TERMINAL_EVENTS

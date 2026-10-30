@@ -71,11 +71,45 @@ class CentralKafkaService:
     def handle_activation_bytes(self, raw: bytes) -> bool:
         try:
             message = decode(raw)
-            self.handle_activation(message)
+            if message["event_type"] == "AVAILABLE_STATIONS_REQUEST":
+                self.handle_available_stations_request(message)
+            else:
+                self.handle_activation(message)
             return True
         except MessageValidationError as exc:
             LOGGER.warning("Discarding malformed activation request: %s", exc)
             return True  # poison messages must not block a partition forever
+
+    def handle_available_stations_request(self, message: dict[str, Any]) -> None:
+        """Return a current, Central-sourced list to one active operator."""
+        if message.get("event_type") != "AVAILABLE_STATIONS_REQUEST":
+            raise MessageValidationError("unsupported station discovery event_type")
+        self._require(message, "operator_id", "request_id")
+        operator_id, request_id = message["operator_id"], message["request_id"]
+        operator = self.db.get_operator(operator_id)
+        error = None
+        stations: list[dict[str, str]] = []
+        if operator is None:
+            error = "UNKNOWN_OPERATOR"
+        elif not operator.active:
+            error = "OPERATOR_INACTIVE"
+        else:
+            stations = [
+                {"station_id": view.ws_id, "location": view.location}
+                for view in self.state.snapshot()
+                if view.status is StationStatus.AVAILABLE
+            ]
+        row = self._outgoing(
+            OPERATOR_EVENTS,
+            "AVAILABLE_STATIONS_RESPONSE",
+            {"stations": stations, "error": error},
+            f"available-stations:{request_id}",
+            operator_id=operator_id,
+            request_id=request_id,
+            key=operator_id,
+        )
+        self.db.add_outgoing(*row)
+        self.flush_outbox()
 
     def handle_activation(self, message: dict[str, Any]) -> None:
         if message.get("event_type") != "ACTIVATION_REQUEST":

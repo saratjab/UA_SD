@@ -7,7 +7,8 @@ from unittest import mock
 
 from common.kafka_contract import WS_COMMANDS, envelope
 from WM_Central.kafka_service import CentralKafkaService
-from WM_Central.monitoring import control_loop, execute_control_line, execute_menu_choice, format_station_table, select_station_ids, start_control_menu
+from WM_Central.monitoring import STATUS_COLOR, control_loop, execute_control_line, execute_menu_choice, format_station_table, select_station_ids, start_control_menu
+from WM_Central.models import StationStatus
 from WM_Central.models import IrrigationStatus, StationStatus
 from WM_Central.state_manager import StateManager
 
@@ -88,12 +89,24 @@ class ControlAndMonitoringTests(DatabaseTestCase):
         self.assertIn("WATERING", table)
         self.assertIn("5.5", table)
         self.assertIn("0.4", table)
+        self.assertIn("OP_001", table)
         self.state.report_fault("WS_001", self.state._connections["WS_001"], "leak", "pipe")
         self.assertIn("LEAK", format_station_table(self.state.snapshot()))
         self.service.handle_engine_event(envelope("IRRIGATION_COMPLETED", {
             "end_reason": "LEAK_DETECTED", "duration_seconds": 1.2, "accumulated_volume_liters": 0.5,
         }, ws_id="WS_001", request_id=request_id))
         self.assertIn("0.5", format_station_table(self.state.snapshot()))
+
+    def test_status_caption_and_visual_mapping_are_preserved_for_all_states(self) -> None:
+        self.assertEqual(STATUS_COLOR, {
+            StationStatus.AVAILABLE: "GREEN",
+            StationStatus.WATERING: "GREEN BLINKING",
+            StationStatus.LEAK: "RED",
+            StationStatus.OUT_OF_SERVICE: "ORANGE",
+            StationStatus.DISCONNECTED: "GRAY",
+        })
+        self.service.issue_station_command("BLOCK_WS", "WS_001")
+        self.assertIn("Out of Service", format_station_table(self.state.snapshot()))
 
     def test_numbered_menu_dispatches_status_and_rejects_invalid_input(self) -> None:
         with self.assertLogs("central-test", level="ERROR") as captured:

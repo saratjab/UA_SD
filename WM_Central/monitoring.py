@@ -1,8 +1,7 @@
 """Monitoring-panel helpers.
 
-For now: the status -> colour mapping required by the PDF and a plain-text
-station table. The real panel (live refresh, blinking, flow/volume) is built
-on top of ``StateManager.snapshot()`` in a later step.
+The live status table is built on ``StateManager.snapshot()`` and deliberately
+uses plain text because it is also written to Railway logs.
 """
 
 from __future__ import annotations
@@ -29,13 +28,16 @@ STATUS_COLOR: dict[StationStatus, str] = {
 def format_station_table(views: list[StationView]) -> str:
     if not views:
         return "  (no stations registered yet)"
-    lines = [f"  {'WS ID':<12}{'LOCATION':<24}{'STATUS':<17}{'FLOW L/M':>10}{'VOLUME L':>12}  FAULT"]
+    lines = [f"  {'WS ID':<12}{'LOCATION':<24}{'STATUS':<17}{'FLOW L/M':>10}{'VOLUME L':>12}  {'OPERATOR':<12} FAULT"]
     for view in views:
         caption = "Out of Service" if view.status is StationStatus.OUT_OF_SERVICE else view.status.value
+        if view.status is StationStatus.WATERING:
+            caption = "● " + caption
         lines.append(
             f"  {view.ws_id:<12}{view.location:<24}{caption:<17}"
             f"{view.flow_rate_lpm if view.flow_rate_lpm is not None else '-':>10}"
             f"{view.accumulated_volume_liters if view.accumulated_volume_liters is not None else '-':>12}  "
+            f"{(view.operator_id if view.status is StationStatus.WATERING else '-'):<12} "
             f"{view.fault or '-'} ({STATUS_COLOR[view.status]})"
         )
     return "\n".join(lines)
