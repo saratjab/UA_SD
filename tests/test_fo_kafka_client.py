@@ -14,8 +14,9 @@ from WM_FO.main import _poll_worker
 
 class FieldOperatorKafkaTests(unittest.TestCase):
     class Publisher:
+        def __init__(self): self.records = []
         def publish(self, *_args, **_kwargs):
-            pass
+            self.records.append((_args, _kwargs))
 
     def test_same_operator_uses_stable_group_and_routes_live_events_by_request(self) -> None:
         publisher = self.Publisher()
@@ -46,6 +47,130 @@ class FieldOperatorKafkaTests(unittest.TestCase):
             second.handle_bytes(json.dumps(event).encode())
             self.assertFalse(second._pending[second_request].is_set())
             self.assertEqual(display.call_count, 1)
+
+    def test_target_volume_activation_uses_station_key(self) -> None:
+        publisher = self.Publisher()
+        operator = FieldOperator("OP_001", publisher)  # type: ignore[arg-type]
+        operator.request_irrigation("WS_009", target_volume_liters=2.5)
+        args, kwargs = publisher.records[0]
+        self.assertEqual(args[0], "wm.activation.requests")
+        self.assertEqual(args[1]["payload"], {"target_volume_liters": 2.5})
+        self.assertEqual(kwargs["key"], "WS_009")
+
+    def test_manual_activation_publishes_empty_payload_with_unique_request_id(self) -> None:
+        publisher = self.Publisher()
+        operator = FieldOperator("OP_002", publisher)  # type: ignore[arg-type]
+        first = operator.request_irrigation("WS_001")
+        second = operator.request_irrigation("WS_001")
+        self.assertNotEqual(first, second)
+        topic, message = publisher.records[0][0]
+        self.assertEqual(topic, "wm.activation.requests")
+        self.assertEqual(message["ws_id"], "WS_001")
+        self.assertEqual(message["operator_id"], "OP_002")
+        self.assertEqual(message["request_id"], first)
+        self.assertEqual(message["payload"], {})
+
+    def test_station_discovery_publishes_request_and_correlates_matching_response(self) -> None:
+        publisher = self.Publisher()
+        operator = FieldOperator("OP_002", publisher)  # type: ignore[arg-type]
+
+        def publish(_topic, request, *, key=None):
+            self.assertEqual(_topic, "wm.activation.requests")
+            self.assertEqual(key, "OP_002")
+            self.assertEqual(request["event_type"], "AVAILABLE_STATIONS_REQUEST")
+            self.assertEqual(request["operator_id"], "OP_002")
+            self.assertTrue(request["request_id"])
+            self.assertEqual(request["payload"], {})
+            response = envelope(
+                "AVAILABLE_STATIONS_RESPONSE",
+                {"stations": [{"station_id": "WS_009", "location": "Orchard"}], "error": None},
+                operator_id="OP_002", request_id=request["request_id"],
+            )
+            operator.handle_bytes(encode(response))
+
+        publisher.publish = publish
+        self.assertEqual(operator.request_available_stations(timeout=0.1), [
+            {"station_id": "WS_009", "location": "Orchard"},
+        ])
+
+    def test_other_operator_and_irrigation_events_do_not_complete_discovery(self) -> None:
+        publisher = self.Publisher()
+        operator = FieldOperator("OP_002", publisher)  # type: ignore[arg-type]
+        result = []
+        failures = []
+
+        def discover():
+            try:
+                result.extend(operator.request_available_stations(timeout=2.0))
+            except Exception as exc:  # captured for assertion in the test thread
+                failures.append(exc)
+
+        thread = threading.Thread(target=discover)
+        thread.start()
+        while not publisher.records:
+            threading.Event().wait(0.001)
+        request = publisher.records[0][0][1]
+        unrelated = envelope("IRRIGATION_COMPLETED", {}, operator_id="OP_002",
+                             ws_id="WS_001", request_id="irrigation-request")
+        wrong_operator = envelope("AVAILABLE_STATIONS_RESPONSE", {"stations": [], "error": None},
+                                  operator_id="OP_003", request_id=request["request_id"])
+        response = envelope("AVAILABLE_STATIONS_RESPONSE",
+                            {"stations": [], "error": None},
+                            operator_id="OP_002", request_id=request["request_id"])
+        with mock.patch("WM_FO.kafka_client.show_event") as show_event:
+            operator.handle_bytes(encode(unrelated))
+            operator.handle_bytes(encode(wrong_operator))
+            self.assertTrue(thread.is_alive())
+            operator.handle_bytes(encode(response))
+            show_event.assert_called_once_with(unrelated)
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(result, [])
+
+    def test_station_discovery_timeout_is_controlled_and_cleans_pending_state(self) -> None:
+        operator = FieldOperator("OP_002", self.Publisher())  # type: ignore[arg-type]
+        with self.assertRaisesRegex(TimeoutError, "did not return"):
+            operator.request_available_stations(timeout=0)
+        self.assertEqual(operator._station_discoveries, {})
+
+    def test_station_discovery_publish_failure_cleans_pending_state(self) -> None:
+        class BrokenPublisher:
+            def publish(self, *_args, **_kwargs):
+                raise OSError("broker unavailable")
+
+        operator = FieldOperator("OP_002", BrokenPublisher())  # type: ignore[arg-type]
+        with self.assertRaisesRegex(OSError, "broker unavailable"):
+            operator.request_available_stations()
+        self.assertEqual(operator._station_discoveries, {})
+
+    def test_local_event_consumer_filters_by_station_and_operator(self) -> None:
+        operator = FieldOperator("OP_002", self.Publisher(), station_id="WS_001")  # type: ignore[arg-type]
+        request_id = operator.request_irrigation("WS_001")
+        event = envelope("IRRIGATION_TELEMETRY", {"sequence": 1, "flow_rate_lpm": 6.0,
+                            "accumulated_volume_liters": 0.1, "duration_seconds": 1.0},
+                         ws_id="WS_002", operator_id="OP_002", request_id=request_id)
+        with mock.patch("WM_FO.kafka_client.show_event") as display:
+            operator.handle_bytes(encode(event))
+        display.assert_not_called()
+        self.assertFalse(operator._pending[request_id].is_set())
+
+    def test_local_consumer_group_can_be_station_specific(self) -> None:
+        operator = FieldOperator("OP_002", self.Publisher(),
+                                 consumer_group_id="wm-ws-local-WS_001-v1",
+                                 station_id="WS_001")  # type: ignore[arg-type]
+        seen = {}
+        def factory(_bootstrap, group_id, _topics, _handler, consumer, **_kwargs):
+            seen["group"] = group_id
+            return object()
+        with mock.patch("WM_FO.kafka_client.KafkaWorker", side_effect=factory):
+            operator.worker("localhost", consumer=object())
+        self.assertEqual(seen["group"], "wm-ws-local-WS_001-v1")
+
+    def test_field_operator_rejects_mixed_modes(self) -> None:
+        operator = FieldOperator("OP_001", self.Publisher())  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "not both"):
+            operator.request_irrigation("WS_001", 2, 1.0)
 
     def test_restarted_operator_resumes_and_displays_completion_once(self) -> None:
         publisher = self.Publisher()
@@ -83,8 +208,8 @@ class FieldOperatorKafkaTests(unittest.TestCase):
 
         self.assertEqual(groups, [previous_process._consumer_group_id])
         self.assertIn(request_id, output.getvalue())
-        self.assertIn("30.0 s, 3.0 L, reason TIME_LIMIT", output.getvalue())
-        self.assertEqual(output.getvalue().count("Irrigation completed"), 1)
+        self.assertIn("elapsed 30.0 s, total volume 3.0 L, reason TIME_LIMIT", output.getvalue())
+        self.assertEqual(output.getvalue().count("completed:"), 1)
 
     def test_fresh_operator_starts_at_latest_and_filters_other_operators(self) -> None:
         operator = FieldOperator("OP_NEW", self.Publisher())  # type: ignore[arg-type]
@@ -138,9 +263,9 @@ class FieldOperatorKafkaTests(unittest.TestCase):
             self.assertTrue(operator.handle_bytes(encode(completed)))
             self.assertTrue(operator.handle_bytes(encode(completed)))
             self.assertTrue(operator.wait_for_result(request_id, timeout=0.01))
-        self.assertIn(f"[WS_001] Irrigation completed for request {request_id}: 10 s, 3.5 L", output.getvalue())
-        self.assertEqual(output.getvalue().count("Irrigation completed"), 1)
-        self.assertIn("Irrigation progress", output.getvalue())
+        self.assertIn(f"[WS_001] Request {request_id} completed: elapsed 10 s, total volume 3.5 L", output.getvalue())
+        self.assertEqual(output.getvalue().count("completed:"), 1)
+        self.assertIn("progress:", output.getvalue())
 
     def test_poll_worker_signals_ready_only_after_its_first_poll(self) -> None:
         class Worker:

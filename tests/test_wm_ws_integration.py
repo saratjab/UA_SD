@@ -96,7 +96,9 @@ class WMWSIntegrationTests(unittest.TestCase):
         self.assertTrue(wait_until(lambda: self.state.status_of("WS_INT") is StationStatus.AVAILABLE))
         view = self.state.snapshot()[0]
         self.assertEqual(view.location, "Integration Garden")  # registration carries location
-        self.assertEqual(self.engine.config.ws_id, "WS_INT")  # HELLO_ACK assignment
+        # Central registration can complete just before the independent Engine
+        # HELLO_ACK reaches its client loop; wait for that asynchronous update.
+        self.assertTrue(wait_until(lambda: self.engine.config.ws_id == "WS_INT"))
 
         self.assertTrue(self.engine.request_irrigation("operator-1", duration_seconds=1.0))
         self.assertTrue(wait_until(lambda: self.valve.is_open))

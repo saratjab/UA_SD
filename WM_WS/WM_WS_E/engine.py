@@ -168,17 +168,16 @@ class WateringStationEngine:
         self.failed = False
         LOGGER.info("Simulated KO cleared")
 
-    def request_irrigation(self, operator_id: str, duration_seconds: float | None = None) -> bool:
+    def request_irrigation(self, operator_id: str, duration_seconds: float | None = None,
+                           target_volume_liters: float | None = None) -> bool:
         if not self._monitor_ready.is_set():
             LOGGER.warning("Irrigation rejected while WM_WS_M is unavailable")
             return False
         if self.failed or self.blocked:
             LOGGER.warning("Irrigation rejected while Engine is failed")
             return False
-        duration = duration_seconds
-        if duration is None:
-            duration = self.config.default_irrigation_duration
-        request = IrrigationRequest(operator_id=operator_id, duration_seconds=duration)
+        request = IrrigationRequest(operator_id=operator_id, duration_seconds=duration_seconds,
+                                    target_volume_liters=target_volume_liters)
         return self.irrigation.start(request)
 
     def stop_irrigation(self) -> bool:

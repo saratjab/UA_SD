@@ -27,6 +27,7 @@ from .state_manager import StateManager
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_REGISTER_TIMEOUT = 10.0  # seconds a new connection may stay silent
+DEFAULT_SOCKET_WRITE_TIMEOUT = 5.0
 
 
 class MonitorConnection:
@@ -42,7 +43,15 @@ class MonitorConnection:
 
     def send(self, message: dict[str, Any]) -> None:
         with self._send_lock:
-            protocol.send_message(self.sock, message)
+            previous_timeout = self.sock.gettimeout()
+            self.sock.settimeout(DEFAULT_SOCKET_WRITE_TIMEOUT)
+            try:
+                protocol.send_message(self.sock, message)
+            finally:
+                try:
+                    self.sock.settimeout(previous_timeout)
+                except OSError:
+                    pass
 
     def close(self) -> None:
         """Idempotent. shutdown() first so a thread blocked in recv() wakes up."""
@@ -93,10 +102,15 @@ class CentralSocketServer:
 
     def start(self) -> None:
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind((self._host, self._port))
-        server.listen()
-        server.settimeout(1.0)  # lets the accept loop notice stop()
+        try:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind((self._host, self._port))
+            server.listen()
+            server.settimeout(1.0)  # lets the accept loop notice stop()
+        except OSError:
+            LOGGER.exception("Could not bind WM_Central station socket on %s:%s", self._host, self._port)
+            server.close()
+            raise
         self._server_sock = server
         self._accept_thread = threading.Thread(
             target=self._accept_loop, name="wm-central-accept", daemon=True
@@ -172,9 +186,15 @@ class CentralSocketServer:
                     if connection.ws_id is None:
                         break  # an unregistered peer gets no second chance
                     continue
-                except OSError:
+                except OSError as exc:
+                    if not self._stop.is_set():
+                        LOGGER.warning("Socket I/O failed for Monitor %s: %s", connection, exc)
                     break
-                keep_open = self._dispatch(connection, message)
+                try:
+                    keep_open = self._dispatch(connection, message)
+                except Exception:
+                    LOGGER.exception("Failed processing Monitor frame from %s", connection)
+                    break
         finally:
             self._cleanup(connection)
 
@@ -273,7 +293,7 @@ class CentralSocketServer:
             connection.send(message)
             return True
         except OSError as exc:
-            LOGGER.warning("Could not answer %s: %s", connection, exc)
+            LOGGER.warning("Could not answer Monitor %s: %s", connection, exc)
             return False
 
 

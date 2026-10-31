@@ -20,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kafka-host", required=True, help="Kafka bootstrap host")
     parser.add_argument("--kafka-port", required=True, type=int, help="Kafka bootstrap port")
     parser.add_argument("--operator-id", required=True, help="Operator ID registered in WM_Central")
-    parser.add_argument("--request-file", help="JSON array or JSONL file of irrigation requests")
+    parser.add_argument("--request-file", help="JSONL file of sequential duration, target-volume, or manual-stop requests")
     parser.add_argument("--ws-id", help="Watering Station ID for a one-off request")
     parser.add_argument("--duration-seconds", type=int, help="Duration for a one-off request")
     parser.add_argument("--request-timeout", type=float, default=300.0,

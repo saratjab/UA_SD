@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from common.kafka_contract import decode, envelope
+from common.kafka_contract import decode, encode, envelope
 from WM_Central.kafka_service import CentralKafkaService
 from WM_Central.models import DenyReason, IrrigationStatus
 from WM_Central.state_manager import StateManager
@@ -12,8 +12,13 @@ from .helpers import DatabaseTestCase
 class FakePublisher:
     def __init__(self) -> None:
         self.records: list[tuple[str, dict]] = []
+        self.keys: list[tuple[str, str | None]] = []
+        self.fail_topics: set[str] = set()
     def publish(self, topic: str, message: dict, *, key: str | None = None) -> None:
+        if topic in self.fail_topics:
+            raise RuntimeError("simulated broker outage")
         self.records.append((topic, message))
+        self.keys.append((topic, key))
 
 
 class CentralKafkaTests(DatabaseTestCase):
@@ -37,6 +42,99 @@ class CentralKafkaTests(DatabaseTestCase):
         self.service.handle_activation(self.request())
         self.assertEqual(len([m for topic, m in self.publisher.records if topic == "wm.ws.commands"]), 1)
 
+    def test_command_publication_failure_survives_restart_and_activation_replay(self) -> None:
+        self.publisher.fail_topics.add("wm.ws.commands")
+        self.service.handle_activation(self.request("pending-start"))
+        self.assertEqual(self.db.get_irrigation("pending-start").status, IrrigationStatus.AUTHORIZED)  # type: ignore[union-attr]
+        pending = self.db.pending_outgoing()
+        self.assertTrue(any(row[1] == "wm.ws.commands" and row[2] == "WS_001" for row in pending))
+        self.assertTrue(any(row[1] == "wm.operator.events" and row[2] == "OP_001" for row in pending))
+
+        self.publisher.fail_topics.clear()
+        restarted = CentralKafkaService(self.db, self.state, self.publisher)  # type: ignore[arg-type]
+        restarted.handle_activation(self.request("pending-start"))
+        commands = [m for topic, m in self.publisher.records if topic == "wm.ws.commands" and m.get("request_id") == "pending-start"]
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(self.db.pending_outgoing(), [])
+
+    def test_completion_notification_retries_after_database_transition(self) -> None:
+        self.service.handle_activation(self.request("completion-retry"))
+        self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {}, ws_id="WS_001", request_id="completion-retry"))
+        self.publisher.fail_topics.add("wm.operator.events")
+        completion = envelope("IRRIGATION_COMPLETED", {"end_reason": "TIME_LIMIT", "duration_seconds": 3.0, "accumulated_volume_liters": 0.3}, ws_id="WS_001", request_id="completion-retry")
+        self.service.handle_engine_event(completion)
+        self.assertEqual(self.db.get_irrigation("completion-retry").status, IrrigationStatus.ENDED)  # type: ignore[union-attr]
+        self.assertTrue(any(row[3]["event_type"] == "IRRIGATION_COMPLETED" for row in self.db.pending_outgoing()))
+
+        self.publisher.fail_topics.clear()
+        restarted = CentralKafkaService(self.db, self.state, self.publisher)  # type: ignore[arg-type]
+        restarted.handle_engine_event(completion)
+        events = [m for topic, m in self.publisher.records if topic == "wm.operator.events" and m.get("request_id") == "completion-retry" and m["event_type"] == "IRRIGATION_COMPLETED"]
+        self.assertEqual(len(events), 1)
+
+    def test_target_volume_survives_authorization_command_and_final_transition(self) -> None:
+        request = envelope("ACTIVATION_REQUEST", {"target_volume_liters": 1.25}, ws_id="WS_001", operator_id="OP_001", request_id="volume-mode")
+        self.service.handle_activation(request)
+        record = self.db.get_irrigation("volume-mode")
+        self.assertEqual(record.requested_volume_l, 1.25)  # type: ignore[union-attr]
+        command = next(m for topic, m in self.publisher.records if topic == "wm.ws.commands" and m.get("request_id") == "volume-mode")
+        self.assertEqual(command["payload"], {"target_volume_liters": 1.25})
+        completion = envelope("IRRIGATION_COMPLETED", {"end_reason": "TARGET_VOLUME", "duration_seconds": 12.5, "accumulated_volume_liters": 1.25}, ws_id="WS_001", request_id="volume-mode")
+        self.service.handle_engine_event(completion)
+        self.assertEqual(self.db.get_irrigation("volume-mode").end_reason.value, "TARGET_VOLUME")  # type: ignore[union-attr]
+
+    def test_indefinite_request_is_authorized_without_a_limit(self) -> None:
+        request = envelope("ACTIVATION_REQUEST", {}, ws_id="WS_001", operator_id="OP_001", request_id="manual-mode")
+        self.service.handle_activation(request)
+        command = next(m for topic, m in self.publisher.records if topic == "wm.ws.commands" and m.get("request_id") == "manual-mode")
+        self.assertEqual(command["payload"], {})
+
+    def test_station_discovery_returns_only_available_stations_to_requesting_operator(self) -> None:
+        # WS_001 remains available; the other known stations cover every
+        # non-available state returned by StateManager.snapshot().
+        self.state.register("WS_WATERING", "Watering Garden", object())
+        watering_request = envelope("ACTIVATION_REQUEST", {}, ws_id="WS_WATERING",
+                                    operator_id="OP_001", request_id="watering-request")
+        self.service.handle_activation(watering_request)
+        self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {},
+                                                  ws_id="WS_WATERING", request_id="watering-request"))
+
+        self.state.register("WS_LEAK", "Leaking Garden", object())
+        self.state.report_fault("WS_LEAK", self.state._connections["WS_LEAK"], "leak", "pipe")
+        self.state.register("WS_BLOCKED", "Blocked Garden", object())
+        self.service.issue_station_command("BLOCK_WS", "WS_BLOCKED")
+        self.state.register("WS_OFFLINE", "Offline Garden", object())
+        self.state.disconnect("WS_OFFLINE", self.state._connections["WS_OFFLINE"])
+
+        request = envelope("AVAILABLE_STATIONS_REQUEST", {},
+                           operator_id="OP_002", request_id="station-list-42")
+        self.service.handle_activation_bytes(encode(request))
+        topic, response = next(
+            row for row in self.publisher.records
+            if row[0] == "wm.operator.events" and row[1]["event_type"] == "AVAILABLE_STATIONS_RESPONSE"
+        )
+        self.assertEqual(topic, "wm.operator.events")
+        self.assertIn((topic, "OP_002"), self.publisher.keys)
+        self.assertEqual(response["operator_id"], "OP_002")
+        self.assertEqual(response["request_id"], "station-list-42")
+        self.assertEqual(response["payload"], {
+            "stations": [{"station_id": "WS_001", "location": "North"}],
+            "error": None,
+        })
+
+    def test_station_discovery_rejects_inactive_operator(self) -> None:
+        self.db.add_operator("OP_002", "Two", active=False)
+        request = envelope("AVAILABLE_STATIONS_REQUEST", {},
+                           operator_id="OP_002", request_id="inactive-list")
+        self.service.handle_available_stations_request(request)
+        response = next(
+            row[1] for row in self.publisher.records
+            if row[0] == "wm.operator.events" and row[1]["event_type"] == "AVAILABLE_STATIONS_RESPONSE"
+        )
+        self.assertEqual(response["operator_id"], "OP_002")
+        self.assertEqual(response["request_id"], "inactive-list")
+        self.assertEqual(response["payload"], {"stations": [], "error": "OPERATOR_INACTIVE"})
+
     def test_telemetry_replaces_cumulative_measurement_and_completion_is_idempotent(self) -> None:
         self.service.handle_activation(self.request())
         self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {}, ws_id="WS_001", request_id="request-1"))
@@ -46,6 +144,9 @@ class CentralKafkaTests(DatabaseTestCase):
         complete = envelope("IRRIGATION_COMPLETED", {"end_reason": "TIME_LIMIT", "duration_seconds": 3.0, "accumulated_volume_liters": 0.3}, ws_id="WS_001", request_id="request-1")
         self.service.handle_engine_event(complete); self.service.handle_engine_event(complete)
         self.assertEqual(self.db.get_irrigation("request-1").status, IrrigationStatus.ENDED)  # type: ignore[union-attr]
+        station = next(view for view in self.state.snapshot() if view.ws_id == "WS_001")
+        self.assertEqual(station.flow_rate_lpm, 0.0)
+        self.assertEqual(station.accumulated_volume_liters, 0.3)
 
     def test_completion_after_central_restart_reaches_operator_once_with_final_measurements(self) -> None:
         request_id = "central-restart-request"
