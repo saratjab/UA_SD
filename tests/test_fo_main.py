@@ -7,7 +7,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from WM_FO.main import _file_mode, _interactive_mode, main
+from WM_FO.WM_FO import _file_mode, _interactive_mode, main
 
 REAL_THREAD = threading.Thread
 
@@ -36,8 +36,8 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
             {"ws_id": "WS_002", "target_volume_liters": 2.0},
             {"ws_id": "WS_003"},
         ]
-        with mock.patch("WM_FO.main.load_requests", return_value=records), \
-                mock.patch("WM_FO.main.time.sleep", side_effect=lambda seconds: events.append(("sleep", seconds))):
+        with mock.patch("WM_FO.WM_FO.load_requests", return_value=records), \
+                mock.patch("WM_FO.WM_FO.time.sleep", side_effect=lambda seconds: events.append(("sleep", seconds))):
             _file_mode(Operator(), "unused.jsonl", timeout=1)
 
         self.assertEqual(events, [
@@ -51,8 +51,8 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
         operator.request_irrigation.return_value = "r1"
         operator.wait_for_result.return_value = False
         records = [{"ws_id": "WS_001"}, {"ws_id": "WS_002", "duration_seconds": 2}]
-        with mock.patch("WM_FO.main.load_requests", return_value=records), \
-                mock.patch("WM_FO.main.time.sleep") as sleep:
+        with mock.patch("WM_FO.WM_FO.load_requests", return_value=records), \
+                mock.patch("WM_FO.WM_FO.time.sleep") as sleep:
             with self.assertRaisesRegex(RuntimeError, "lost its terminal-result waiter"):
                 _file_mode(operator, "unused.jsonl", timeout=1)
         operator.request_irrigation.assert_called_once_with("WS_001", None, None)
@@ -146,9 +146,9 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
             self.assertTrue(worker.poll_in_progress)
             return "q"
 
-        with mock.patch("WM_FO.main.KafkaPublisher", return_value=publisher), \
-                mock.patch("WM_FO.main.FieldOperator", return_value=operator), \
-                mock.patch("WM_FO.main.threading.Thread", TrackingThread), \
+        with mock.patch("WM_FO.WM_FO.KafkaPublisher", return_value=publisher), \
+                mock.patch("WM_FO.WM_FO.FieldOperator", return_value=operator), \
+                mock.patch("WM_FO.WM_FO.threading.Thread", TrackingThread), \
                 mock.patch("builtins.input", side_effect=enter_q) as input_mock, \
                 redirect_stdout(io.StringIO()):
             # Omit --ws-id exactly as in the interactive Docker invocation.
@@ -176,9 +176,9 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
             self.assertFalse(any(thread.is_alive() for thread in threads))
 
         worker.close.side_effect = close_worker
-        with mock.patch("WM_FO.main.KafkaPublisher", return_value=publisher), \
-                mock.patch("WM_FO.main.FieldOperator", return_value=operator), \
-                mock.patch("WM_FO.main.threading.Thread", TrackingThread), \
+        with mock.patch("WM_FO.WM_FO.KafkaPublisher", return_value=publisher), \
+                mock.patch("WM_FO.WM_FO.FieldOperator", return_value=operator), \
+                mock.patch("WM_FO.WM_FO.threading.Thread", TrackingThread), \
                 mock.patch("builtins.input", side_effect=KeyboardInterrupt), \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(self._main(publisher, operator), 0)
@@ -189,9 +189,9 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
         publisher = mock.Mock()
         worker, operator = self._ready_mocks()
         worker.wait_until_assigned.return_value = False
-        with mock.patch("WM_FO.main.KafkaPublisher", return_value=publisher), \
-                mock.patch("WM_FO.main.FieldOperator", return_value=operator), \
-                mock.patch("WM_FO.main.threading.Thread") as thread_factory, \
+        with mock.patch("WM_FO.WM_FO.KafkaPublisher", return_value=publisher), \
+                mock.patch("WM_FO.WM_FO.FieldOperator", return_value=operator), \
+                mock.patch("WM_FO.WM_FO.threading.Thread") as thread_factory, \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(self._main(publisher, operator), 1)
         thread_factory.assert_not_called()
@@ -211,9 +211,9 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
             def start(self):
                 raise RuntimeError("thread start failed")
 
-        with mock.patch("WM_FO.main.KafkaPublisher", return_value=publisher), \
-                mock.patch("WM_FO.main.FieldOperator", return_value=operator), \
-                mock.patch("WM_FO.main.threading.Thread", NeverStartedThread), \
+        with mock.patch("WM_FO.WM_FO.KafkaPublisher", return_value=publisher), \
+                mock.patch("WM_FO.WM_FO.FieldOperator", return_value=operator), \
+                mock.patch("WM_FO.WM_FO.threading.Thread", NeverStartedThread), \
                 redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(RuntimeError, "thread start failed"):
                 self._main(publisher, operator)
@@ -244,11 +244,11 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
             self.assertTrue(poll_entered.wait(timeout=1))
             return "q"
 
-        with mock.patch("WM_FO.main.KafkaPublisher", return_value=publisher), \
-                mock.patch("WM_FO.main.FieldOperator", return_value=operator), \
-                mock.patch("WM_FO.main.threading.Thread", TrackingThread), \
-                mock.patch("WM_FO.main.POLL_SHUTDOWN_TIMEOUT_SECONDS", 0.01), \
-                mock.patch("WM_FO.main.LOGGER.warning") as warning, \
+        with mock.patch("WM_FO.WM_FO.KafkaPublisher", return_value=publisher), \
+                mock.patch("WM_FO.WM_FO.FieldOperator", return_value=operator), \
+                mock.patch("WM_FO.WM_FO.threading.Thread", TrackingThread), \
+                mock.patch("WM_FO.WM_FO.POLL_SHUTDOWN_TIMEOUT_SECONDS", 0.01), \
+                mock.patch("WM_FO.WM_FO.LOGGER.warning") as warning, \
                 mock.patch("builtins.input", side_effect=enter_q), \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(self._main(publisher, operator), 1)
@@ -279,10 +279,10 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
 
         worker.poll_once.side_effect = fail_initial_poll
         worker.close.side_effect = close_worker
-        with mock.patch("WM_FO.main.KafkaPublisher", return_value=publisher), \
-                mock.patch("WM_FO.main.FieldOperator", return_value=operator), \
-                mock.patch("WM_FO.main.threading.Thread", TrackingThread), \
-                mock.patch("WM_FO.main.LOGGER.exception"), \
+        with mock.patch("WM_FO.WM_FO.KafkaPublisher", return_value=publisher), \
+                mock.patch("WM_FO.WM_FO.FieldOperator", return_value=operator), \
+                mock.patch("WM_FO.WM_FO.threading.Thread", TrackingThread), \
+                mock.patch("WM_FO.WM_FO.LOGGER.exception"), \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(self._main(publisher, operator), 1)
         worker.close.assert_called_once()

@@ -123,7 +123,7 @@ includes station/request IDs, elapsed time, total volume, and completion reason.
 The sample demonstrates all three modes and places indefinite watering last.
 
 ```sh
-python3 -m WM_FO.main --kafka-host localhost --kafka-port 9092 \
+python3 -m WM_FO.WM_FO --kafka-host localhost --kafka-port 9092 \
   --operator-id OP_001 --request-file examples/automated_irrigation_requests.jsonl
 ```
 
@@ -132,9 +132,9 @@ Install dependencies with `python3 -m pip install -r requirements.txt`, then run
 Engine respectively:
 
 ```sh
-python3 -m WM_Central.main --socket-port 5000 --kafka-host localhost --kafka-port 9092 --seed-dev
-python3 -m WM_WS.WM_WS_M.main --ws-id WS_001 --location field-a --central-host localhost --central-port 5000 --engine-host 127.0.0.1 --engine-port 5001
-python3 -m WM_WS.WM_WS_E.main --ws-id WS_001 --kafka-host localhost --kafka-port 9092 --monitor-host 127.0.0.1 --monitor-port 5001
+python3 -m WM_Central.WM_Central --socket-port 5000 --kafka-host localhost --kafka-port 9092 --seed-dev
+python3 -m WM_WS.WM_WS_M.WM_WS_M --ws-id WS_001 --location field-a --central-host localhost --central-port 5000 --engine-host 127.0.0.1 --engine-port 5001
+python3 -m WM_WS.WM_WS_E.WM_WS_E --ws-id WS_001 --kafka-host localhost --kafka-port 9092 --monitor-host 127.0.0.1 --monitor-port 5001
 ```
 
 Run unit tests with `python3 -m unittest discover -v`. Real-broker tests are

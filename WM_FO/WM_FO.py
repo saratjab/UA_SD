@@ -1,7 +1,7 @@
 """Field Operator entry point.
 
 Run from the repository root with:
-    python -m WM_FO.main --kafka-host localhost --kafka-port 9092 --operator-id OP_001
+    python -m WM_FO.WM_FO --kafka-host localhost --kafka-port 9092 --operator-id OP_001
 """
 from __future__ import annotations
 

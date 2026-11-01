@@ -15,14 +15,14 @@ The Monitor keeps the station registered with Central while it checks the Engine
 
 Key entry points:
 
-- Central bootstrap (WM_Central/main.py:34)
+- Central bootstrap (WM_Central/WM_Central.py:34)
 - Socket server (WM_Central/socket_server.py:63)
 - State manager (WM_Central/state_manager.py:85)
 - SQLite database layer (WM_Central/database.py:58)
 - Station engine (WM_WS/WM_WS_E/engine.py:18)
 - Irrigation controller (WM_WS/WM_WS_E/irrigation.py:49)
 - Station monitor (WM_WS/WM_WS_M/monitor.py:19)
-- Field Operator CLI (WM_FO/main.py:42)
+- Field Operator CLI (WM_FO/WM_FO.py:42)
 
 ### Behavioral constraints
 

@@ -301,7 +301,7 @@ class CentralAdminApiTests(DatabaseTestCase):
         self.assertEqual(len(result["stations"]), 2)
 
     def test_central_main_starts_and_shuts_down_cleanly_without_tty(self) -> None:
-        from WM_Central import main as central_main
+        from WM_Central import WM_Central as central_main
 
         config = SimpleNamespace(
             db_path=":memory:", seed_dev=False, log_level="INFO", kafka_host="localhost", kafka_port=9092,
@@ -351,7 +351,7 @@ class CentralAdminApiTests(DatabaseTestCase):
         self.assertEqual(thread_ctor.call_count, 4)
 
     def test_listener_startup_failure_is_logged_and_database_closes(self) -> None:
-        from WM_Central import main as central_main
+        from WM_Central import WM_Central as central_main
 
         config = SimpleNamespace(
             db_path=":memory:", seed_dev=False, log_level="INFO", kafka_host="localhost", kafka_port=9092,

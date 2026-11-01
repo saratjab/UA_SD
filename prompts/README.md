@@ -1,44 +1,32 @@
-# AI prompt record
+# WaterManagement Development Prompts
 
-This is a curated record of the substantial AI-assisted work themes for Release
-1, not a complete conversation transcript. Summaries below are reconstructions
-from the task records and resulting project; they are not presented as exact
-historical wording. The original text is included only where it is available in
-the linked prompt file.
+This folder contains the development prompts prepared for the WaterManagement Distributed Systems project (Release 1).
 
-## Existing prompt record
+## How these prompts were prepared
 
-- [`kafka-irrigation-lifecycle.md`](kafka-irrigation-lifecycle.md) — records the
-  Central–Engine Kafka lifecycle work, the constraint to preserve the Monitor
-  sockets and SQLite, and the contract documentation. Its original prompt is not
-  available verbatim; the file labels the text as a summary.
+The prompts were designed using the WaterManagement project plan as the shared guide for scope, milestones, component responsibilities, and integration.
+Their wording and organization were refined with GPT Prompt Enhance to make each task clearer and easier to follow.
+The official assignment remains the authority for course requirements; the project plan records the team's design choices.
+These files are focused task briefs, not complete chat transcripts, and they do not claim that every requested implementation or test has been completed.
+Any implementation or test status should be verified in the source code, test results, and project documentation.
 
-## Main prompt themes
+## Prompt files
 
-1. **Architecture and irrigation lifecycle — reconstructed summary.** Trace the
-   four applications and preserve the Monitor–Central and Monitor–Engine socket
-   protocols. Connect FO requests to Central authorization, Engine commands,
-   telemetry, and operator results through Kafka; retain Central's SQLite state
-   and document the message contract. The existing implementation record is
-   linked above rather than duplicated.
-2. **Reliability, faults, and restart recovery — reconstructed summary.** Audit
-   component disconnects and failures individually; keep valve safety and
-   station status correct; reconnect only the affected components; preserve
-   pending station events across Central restarts; and avoid duplicate state
-   transitions or notifications.
-3. **FO crash and result recovery — reconstructed summary.** Let a returning FO
-   using the same operator ID retrieve a completion produced while it was down,
-   including request ID and final measurements, without replaying all historical
-   events or exposing another operator's data.
-4. **Real Kafka testing and command delivery — reconstructed summary.** Exercise
-   the real-broker flow with an established Monitor–Engine handshake, investigate
-   command-consumption delay separately from Kafka lag, retain rejection reason
-   validation, and verify prompt dispatch through final result delivery.
-5. **Submission documentation — reconstructed summary.** Prepare a concise
-   project README, explain design and failure handling for assessment, organize
-   the AI prompt record, preserve student names, and distinguish local Docker
-   evidence from Railway and two-PC acceptance that remain pending.
+| File | Purpose |
+|---|---|
+| [project_context_and_monitor_impl.md](project_context_and_monitor_impl.md) | Introduces the full WaterManagement system and defines the scope and integration context for WM_WS_M. |
+| [implement_detailed_ws_m.md](implement_detailed_ws_m.md) | Gives the detailed implementation requirements for the Monitor, including its TCP protocol, registration, Engine handshake, health checks, fault reporting, and tests. |
+| [implement_field_operator.md](implement_field_operator.md) | Defines the WM_FO application, its one-off and file-driven irrigation requests, Kafka notifications, and tests. |
+| [implement_kafka_integration.md](implement_kafka_integration.md) | Defines the Kafka request and operator-response integration between WM_FO and WM_Central, without implementing FO again. |
+| [kafka-irrigation-lifecycle.md](kafka-irrigation-lifecycle.md) | Defines the wider Central–Engine Kafka irrigation lifecycle, including commands, telemetry, completion, faults, reliability, and integration tests. |
 
-For system operation and design decisions, see the [deployment guide](../docs/local-docker-deployment.md),
-[Kafka contract](../docs/kafka-message-contract.md), [state-model ADR](../docs/adr/ADR-001-state-model-and-schema.md),
-and [implementation report](../docs/report.md).
+## Suggested reading order
+
+1. Start with project_context_and_monitor_impl.md for the overall system and Monitor context.
+2. Read implement_detailed_ws_m.md for the Monitor-specific implementation contract.
+3. Read implement_field_operator.md for the operator application's behavior.
+4. Read implement_kafka_integration.md for the FO-to-Central request and response path.
+5. Read kafka-irrigation-lifecycle.md for the complete Central-to-Engine irrigation lifecycle.
+
+The prompts focus on different implementation stages and can share architectural context, but each file has a distinct task scope.
+When a prompt, project-plan decision, and official assignment appear to conflict, verify the issue against the assignment and the current implementation before changing a shared interface.

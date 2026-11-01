@@ -15,7 +15,7 @@ from WM_WS.WM_WS_E.flow_meter import FlowMeter
 from WM_WS.WM_WS_E.irrigation import IrrigationController
 from WM_WS.WM_WS_E.kafka_service import EngineKafkaService
 from WM_WS.WM_WS_E.valve import SolenoidValve
-from WM_WS.WM_WS_E.main import start_command_thread
+from WM_WS.WM_WS_E.WM_WS_E import start_command_thread
 
 
 class FakePublisher:

@@ -80,7 +80,7 @@ services:
     command:
       - python
       - -m
-      - WM_Central.main
+      - WM_Central.WM_Central
       - --socket-host
       - 0.0.0.0
       - --socket-port
@@ -129,7 +129,7 @@ services:
     command:
       - python
       - -m
-      - WM_WS.WM_WS_M.main
+      - WM_WS.WM_WS_M.WM_WS_M
       - --ws-id
       - "${WS1_ID:-WS_001}"
       - --location
@@ -155,7 +155,7 @@ services:
     command:
       - python
       - -m
-      - WM_WS.WM_WS_E.main
+      - WM_WS.WM_WS_E.WM_WS_E
       - --ws-id
       - "${WS1_ID:-WS_001}"
       - --kafka-host
@@ -181,7 +181,7 @@ services:
     command:
       - python
       - -m
-      - WM_WS.WM_WS_M.main
+      - WM_WS.WM_WS_M.WM_WS_M
       - --ws-id
       - "${WS2_ID:-WS_002}"
       - --location
@@ -207,7 +207,7 @@ services:
     command:
       - python
       - -m
-      - WM_WS.WM_WS_E.main
+      - WM_WS.WM_WS_E.WM_WS_E
       - --ws-id
       - "${WS2_ID:-WS_002}"
       - --kafka-host
@@ -231,7 +231,7 @@ services:
   fo:
     <<: *app-defaults
     profiles: [operator]
-    entrypoint: [python, -m, WM_FO.main]
+    entrypoint: [python, -m, WM_FO.WM_FO]
     command:
       - --kafka-host
       - "${KAFKA_HOST:-kafka}"

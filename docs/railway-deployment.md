@@ -177,7 +177,7 @@ not broker redundancy.
 
 1. Add a second service from the same reviewed repository revision. Set the
    root directory to the repository root and use the root `Dockerfile`. It now
-   starts headless Central with `python -m WM_Central.main`; do not set an
+   starts headless Central with `python -m WM_Central.WM_Central`; do not set an
    interactive start command.
 2. Create a Central volume and attach it with mount path `/data`. This is a
    manual dashboard step. Until you create and attach it, SQLite is ephemeral;

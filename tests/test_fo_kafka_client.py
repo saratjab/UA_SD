@@ -9,7 +9,7 @@ from unittest import mock
 
 from common.kafka_contract import encode, envelope
 from WM_FO.kafka_client import FieldOperator
-from WM_FO.main import _poll_worker
+from WM_FO.WM_FO import _poll_worker
 
 
 class FieldOperatorKafkaTests(unittest.TestCase):
@@ -282,7 +282,7 @@ class FieldOperatorKafkaTests(unittest.TestCase):
 
         worker = Worker()
         ready, failed = threading.Event(), threading.Event()
-        with mock.patch("WM_FO.main.LOGGER.exception"):
+        with mock.patch("WM_FO.WM_FO.LOGGER.exception"):
             thread = threading.Thread(target=_poll_worker, args=(worker, ready, failed), daemon=True)
             thread.start()
             self.assertTrue(ready.wait(timeout=1))

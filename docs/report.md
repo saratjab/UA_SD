@@ -55,7 +55,7 @@ flowchart LR
 
 The live topology uses Railway Central, Kafka, and persistent SQLite in Railway
 Central; PC1 is a Mac running Field Operator instances from the project's
-virtual environment with `python -m WM_FO.main`; PC2 is Ubuntu running two
+virtual environment with `python -m WM_FO.WM_FO`; PC2 is Ubuntu running two
 Docker Monitor/Engine pairs. Both PCs connect to Railway through the configured
 network endpoints and authenticated Kafka TLS/SASL connection. The Mac Field
 Operator was run from the terminal, not in Docker. Field Operators communicate
@@ -257,7 +257,7 @@ request. The command-line option is `--request-file`; a complete example using
 environment variables for the endpoint and operator is:
 
 ```bash
-python -m WM_FO.main \
+python -m WM_FO.WM_FO \
   --kafka-host "$KAFKA_HOST" \
   --kafka-port "$KAFKA_PORT" \
   --operator-id "$OPERATOR_ID" \
