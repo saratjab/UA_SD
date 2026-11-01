@@ -26,7 +26,7 @@ from .state_manager import StateManager
 
 LOGGER = logging.getLogger(__name__)
 
-DEFAULT_REGISTER_TIMEOUT = 10.0  # seconds a new connection may stay silent
+DEFAULT_REGISTER_TIMEOUT = 10.0
 DEFAULT_SOCKET_WRITE_TIMEOUT = 5.0
 
 
@@ -96,17 +96,13 @@ class CentralSocketServer:
             raise RuntimeError("server is not started")
         return self._server_sock.getsockname()[1]
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
     def start(self) -> None:
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server.bind((self._host, self._port))
             server.listen()
-            server.settimeout(1.0)  # lets the accept loop notice stop()
+            server.settimeout(1.0)
         except OSError:
             LOGGER.exception("Could not bind WM_Central station socket on %s:%s", self._host, self._port)
             server.close()
@@ -123,7 +119,7 @@ class CentralSocketServer:
         if self._server_sock is not None:
             for action in (lambda: self._server_sock.shutdown(socket.SHUT_RDWR), self._server_sock.close):
                 try:
-                    action()  # shutdown() wakes a blocked accept() immediately on Linux
+                    action()
                 except OSError:
                     pass
         if self._accept_thread is not None:
@@ -133,14 +129,9 @@ class CentralSocketServer:
             handlers = list(self._handler_threads)
         for connection in connections:
             connection.close()
-        # Wait for the handlers: they update the state/DB while cleaning up, so the
-        # caller may only close the database once they are done.
         for handler in handlers:
             handler.join(timeout=3.0)
 
-    # ------------------------------------------------------------------
-    # Accept / serve
-    # ------------------------------------------------------------------
 
     def _accept_loop(self) -> None:
         assert self._server_sock is not None
@@ -150,7 +141,7 @@ class CentralSocketServer:
             except socket.timeout:
                 continue
             except OSError:
-                break  # listening socket closed by stop()
+                break
             _enable_keepalive(sock)
             connection = MonitorConnection(sock, address)
             with self._connections_lock:
@@ -168,7 +159,6 @@ class CentralSocketServer:
     def _serve(self, connection: MonitorConnection) -> None:
         LOGGER.info("Monitor connection from %s:%s", *connection.address)
         try:
-            # Until REGISTER_WS succeeds the peer may only stay silent briefly.
             connection.sock.settimeout(self._register_timeout)
             keep_open = True
             while keep_open and not self._stop.is_set():
@@ -184,7 +174,7 @@ class CentralSocketServer:
                     if not self._send(connection, protocol.nack_message(_protocol_reason(exc))):
                         break
                     if connection.ws_id is None:
-                        break  # an unregistered peer gets no second chance
+                        break
                     continue
                 except OSError as exc:
                     if not self._stop.is_set():
@@ -206,9 +196,6 @@ class CentralSocketServer:
             self._connections.discard(connection)
             self._handler_threads.discard(threading.current_thread())
 
-    # ------------------------------------------------------------------
-    # Message handling. Each handler returns True to keep the connection open.
-    # ------------------------------------------------------------------
 
     def _dispatch(self, connection: MonitorConnection, message: dict[str, Any]) -> bool:
         message_type = message.get("type")
@@ -233,7 +220,7 @@ class CentralSocketServer:
             self._send(connection, protocol.register_nack_message("invalid_location"))
             return False
 
-        if connection.ws_id is not None:  # registering twice on the same socket
+        if connection.ws_id is not None:
             if connection.ws_id == ws_id.strip():
                 return self._send(connection, protocol.register_ack_message(connection.ws_id))
             self._send(connection, protocol.register_nack_message("already_registered"))
@@ -247,16 +234,16 @@ class CentralSocketServer:
 
         assert outcome.ws_id is not None
         connection.ws_id = outcome.ws_id
-        connection.sock.settimeout(None)  # registered: wait for the next message indefinitely
+        connection.sock.settimeout(None)
         sent = self._send(connection, protocol.register_ack_message(outcome.ws_id))
         if outcome.replaced is not None:
-            outcome.replaced.close()  # network I/O happens outside any state lock
+            outcome.replaced.close()
         return sent
 
     def _handle_fault(self, connection: MonitorConnection, message: dict[str, Any]) -> bool:
         if connection.ws_id is None:
             self._send(connection, protocol.fault_nack_message("not_registered"))
-            return False  # an unregistered peer gets no second chance
+            return False
         if message.get("ws_id") != connection.ws_id:
             return self._send(connection, protocol.fault_nack_message("ws_id_mismatch"))
 
@@ -280,10 +267,9 @@ class CentralSocketServer:
     def _handle_fault_resolved(self, connection: MonitorConnection, message: dict[str, Any]) -> bool:
         if connection.ws_id is None:
             self._send(connection, protocol.fault_nack_message("not_registered"))
-            return False  # an unregistered peer gets no second chance
+            return False
         if message.get("ws_id") != connection.ws_id:
             return self._send(connection, protocol.fault_nack_message("ws_id_mismatch"))
-        # Idempotent: resolving when nothing is open is still acknowledged.
         self._state.resolve_fault(connection.ws_id, connection)
         return self._send(connection, protocol.fault_ack_message(connection.ws_id))
 
@@ -297,10 +283,6 @@ class CentralSocketServer:
             return False
 
 
-# ----------------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------------
-
 def _protocol_reason(exc: protocol.ProtocolError) -> str:
     return "invalid_lrc" if isinstance(exc, protocol.InvalidLRCError) else "malformed_frame"
 
@@ -309,13 +291,13 @@ def _enable_keepalive(sock: socket.socket) -> None:
     """Detect peers that vanish without closing the socket (~25 s)."""
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        if hasattr(socket, "TCP_KEEPIDLE"):  # Linux
+        if hasattr(socket, "TCP_KEEPIDLE"):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
-        elif hasattr(socket, "TCP_KEEPALIVE"):  # macOS
+        elif hasattr(socket, "TCP_KEEPALIVE"):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, 10)
-        elif hasattr(socket, "SIO_KEEPALIVE_VALS"):  # Windows: (on, idle ms, interval ms)
+        elif hasattr(socket, "SIO_KEEPALIVE_VALS"):
             sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 10_000, 5_000))
     except (OSError, AttributeError):
         LOGGER.debug("TCP keepalive tuning not available on this platform")

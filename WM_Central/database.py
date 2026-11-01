@@ -66,9 +66,6 @@ class Database:
         self._connection: sqlite3.Connection | None = None
         self._closed = False
 
-    # ------------------------------------------------------------------
-    # Connection / transaction plumbing
-    # ------------------------------------------------------------------
 
     def _conn(self) -> sqlite3.Connection:
         """The shared connection. Callers must already hold ``self._lock``."""
@@ -77,8 +74,8 @@ class Database:
         if self._connection is None:
             conn = sqlite3.connect(
                 self._path,
-                isolation_level=None,     # autocommit; we manage transactions ourselves
-                check_same_thread=False,  # shared across threads, guarded by self._lock
+                isolation_level=None,
+                check_same_thread=False,
                 timeout=5.0,
             )
             conn.row_factory = sqlite3.Row
@@ -117,10 +114,6 @@ class Database:
                 except sqlite3.Error:
                     LOGGER.exception("Error closing SQLite connection")
                 self._connection = None
-
-    # ------------------------------------------------------------------
-    # Bootstrap
-    # ------------------------------------------------------------------
 
     def initialize(self) -> None:
         """Create tables/indexes if missing (schema.sql is idempotent)."""
@@ -233,10 +226,6 @@ class Database:
         """
         return 0
 
-    # ------------------------------------------------------------------
-    # Operators
-    # ------------------------------------------------------------------
-
     def add_operator(self, operator_id: str, name: str | None = None, active: bool = True) -> None:
         with self.transaction() as conn:
             conn.execute(
@@ -252,9 +241,6 @@ class Database:
     def list_operators(self) -> list[Operator]:
         return [_operator(row) for row in self._all("SELECT * FROM operators ORDER BY operator_id")]
 
-    # ------------------------------------------------------------------
-    # Stations
-    # ------------------------------------------------------------------
 
     def register_station(self, ws_id: str, location: str | None) -> RegistrationResult:
         """Enroll a new station or re-authenticate a known one (one transaction).
@@ -318,10 +304,6 @@ class Database:
                 (self._clock(), ws_id),
             )
 
-    # ------------------------------------------------------------------
-    # Faults (open fault == station is in LEAK)
-    # ------------------------------------------------------------------
-
     def open_fault(
         self,
         ws_id: str,
@@ -354,10 +336,6 @@ class Database:
     def open_faults(self) -> dict[str, Fault]:
         rows = self._all("SELECT * FROM faults WHERE resolved_at IS NULL")
         return {row["ws_id"]: _fault(row) for row in rows}
-
-    # ------------------------------------------------------------------
-    # Irrigations
-    # ------------------------------------------------------------------
 
     def record_irrigation_request(
         self,
@@ -520,10 +498,6 @@ class Database:
         rows = self._all(f"SELECT * FROM irrigations WHERE status IN {_LIVE_SQL}")
         return {row["ws_id"]: _irrigation(row) for row in rows}
 
-
-# ----------------------------------------------------------------------
-# Row -> dataclass mapping
-# ----------------------------------------------------------------------
 
 def _operator(row: sqlite3.Row) -> Operator:
     return Operator(row["operator_id"], row["name"], bool(row["active"]))

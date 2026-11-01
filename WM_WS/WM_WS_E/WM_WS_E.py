@@ -32,7 +32,7 @@ def start_command_thread(
     def watch_request(request_id: str) -> None:
         nonlocal active_request
         try:
-            local_operator.wait_for_result(request_id, None)  # type: ignore[union-attr]
+            local_operator.wait_for_result(request_id, None)
         finally:
             if kafka_service is not None:
                 kafka_service.clear_local_stop(request_id)
@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
 def _poll_worker(worker: object, stop: threading.Event) -> None:
     while not stop.is_set():
         try:
-            worker.poll_once(1.0)  # type: ignore[attr-defined]
+            worker.poll_once(1.0)
         except Exception:
             logging.getLogger(__name__).exception("Kafka polling thread stopped")
             return

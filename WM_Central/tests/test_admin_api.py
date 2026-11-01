@@ -41,7 +41,7 @@ class CentralAdminApiTests(DatabaseTestCase):
         self.state.register("WS_001", "North", object())
         self.state.register("WS_002", "South", object())
         self.publisher = FakePublisher()
-        self.service = CentralKafkaService(self.db, self.state, self.publisher)  # type: ignore[arg-type]
+        self.service = CentralKafkaService(self.db, self.state, self.publisher)
         self.server = CentralAdminServer("127.0.0.1", 0, "very-secret-test-token", self.state, self.service)
         self.server.start()
         self.addCleanup(self.server.stop)
@@ -190,8 +190,7 @@ class CentralAdminApiTests(DatabaseTestCase):
     def test_station_and_all_station_block_activate_controls_use_central_logic(self) -> None:
         code, response = self.post({"action": "block", "station_id": "WS_001"})
         self.assertEqual((code, response["results"][0]["accepted"]), (200, True))
-        self.assertEqual(self.db.get_station("WS_001").admin_state.value, "BLOCKED")  # type: ignore[union-attr]
-
+        self.assertEqual(self.db.get_station("WS_001").admin_state.value, "BLOCKED")
         code, response = self.post({"action": "block", "station_id": "all"})
         self.assertEqual(code, 200)
         self.assertEqual(len(response["results"]), 2)
@@ -216,24 +215,24 @@ class CentralAdminApiTests(DatabaseTestCase):
         code, duration = self.post({"action": "start", "station_id": "WS_001", "duration_seconds": 8})
         self.assertEqual(code, 200)
         duration_record = self.db.get_irrigation(duration["results"][0]["request_id"])
-        self.assertEqual(duration_record.requested_duration_s, 8)  # type: ignore[union-attr]
+        self.assertEqual(duration_record.requested_duration_s, 8)
 
         code, volume = self.post({"action": "start", "station_id": "WS_002", "target_volume_liters": 2.5})
         self.assertEqual(code, 200)
         volume_record = self.db.get_irrigation(volume["results"][0]["request_id"])
-        self.assertEqual(volume_record.requested_volume_l, 2.5)  # type: ignore[union-attr]
+        self.assertEqual(volume_record.requested_volume_l, 2.5)
         command = next(message for topic, message, _key in self.publisher.records
-                       if topic == WS_COMMANDS and message["request_id"] == volume_record.request_id)  # type: ignore[union-attr]
+                       if topic == WS_COMMANDS and message["request_id"] == volume_record.request_id)
         self.assertEqual(command["payload"], {"target_volume_liters": 2.5})
 
         self.state.register("WS_003", "East", object())
         code, manual = self.post({"action": "start", "station_id": "WS_003"})
         self.assertEqual(code, 200)
         manual_record = self.db.get_irrigation(manual["results"][0]["request_id"])
-        self.assertIsNone(manual_record.requested_duration_s)  # type: ignore[union-attr]
-        self.assertIsNone(manual_record.requested_volume_l)  # type: ignore[union-attr]
+        self.assertIsNone(manual_record.requested_duration_s)
+        self.assertIsNone(manual_record.requested_volume_l)
         manual_command = next(message for topic, message, _key in self.publisher.records
-                              if topic == WS_COMMANDS and message["request_id"] == manual_record.request_id)  # type: ignore[union-attr]
+                              if topic == WS_COMMANDS and message["request_id"] == manual_record.request_id)
         self.assertEqual(manual_command["payload"], {})
 
     def test_start_all_selects_only_available_stations(self) -> None:
@@ -291,7 +290,7 @@ class CentralAdminApiTests(DatabaseTestCase):
         with ThreadPoolExecutor(max_workers=8) as pool:
             codes = list(pool.map(control, range(16)))
         self.assertTrue(all(code == 200 for code in codes))
-        self.assertIn(self.db.get_station("WS_001").admin_state.value, {"ACTIVE", "BLOCKED"})  # type: ignore[union-attr]
+        self.assertIn(self.db.get_station("WS_001").admin_state.value, {"ACTIVE", "BLOCKED"})
 
     def test_admin_api_operates_without_a_terminal(self) -> None:
         with mock.patch("WM_Central.monitoring.sys.stdin") as stdin:
@@ -347,7 +346,6 @@ class CentralAdminApiTests(DatabaseTestCase):
         fake_db.close.assert_called_once()
         activation.close.assert_called_once()
         events.close.assert_called_once()
-        # Monitor and outbox workers are separate from stdin and still created.
         self.assertEqual(thread_ctor.call_count, 4)
 
     def test_listener_startup_failure_is_logged_and_database_closes(self) -> None:

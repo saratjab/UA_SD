@@ -18,7 +18,5 @@ COPY WM_FO/ ./WM_FO/
 
 USER app
 
-# Railway and local `docker run` start the headless Central service by default.
-# Configuration is read from environment variables; no interactive stdin is needed.
 CMD ["python", "-m", "WM_Central.WM_Central"]
 

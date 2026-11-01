@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Generate and validate the Railway Kafka listener configuration.
 set -euo pipefail
 
 fail() { echo "Kafka startup configuration error: $1" >&2; exit 78; }
@@ -30,8 +29,6 @@ else
     expected_advertised="INTERNAL://${KAFKA_PRIVATE_HOST}:29092"
 fi
 
-# Reject stale dashboard overrides instead of letting Kafka start with a
-# listener set that hides the internal or public client endpoint.
 [[ "${KAFKA_LISTENERS:-$expected_listeners}" == "$expected_listeners" ]] \
     || fail "KAFKA_LISTENERS must contain the complete enabled listener set: $expected_listeners"
 [[ "${KAFKA_LISTENER_SECURITY_PROTOCOL_MAP:-$expected_protocols}" == "$expected_protocols" ]] \
@@ -47,8 +44,6 @@ export KAFKA_SASL_ENABLED_MECHANISMS=PLAIN
 export KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL=PLAIN
 export KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM=https
 
-# Validate the final values after generation, including addresses, protocol
-# map, and the absence of a client-advertised controller endpoint.
 [[ "$KAFKA_LISTENERS" == "$expected_listeners" ]] \
     || fail "generated KAFKA_LISTENERS is incomplete"
 [[ "$KAFKA_LISTENER_SECURITY_PROTOCOL_MAP" == "$expected_protocols" ]] \

@@ -107,8 +107,6 @@ class KafkaTopicInitTests(unittest.TestCase):
     def test_kafka_38_optional_missing_topic_response_is_detected_by_list_and_created(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            # The fake describe returns Kafka 3.8's successful Optional[topic] response
-            # for missing topics; the initializer must use --list to detect absence.
             calls = self.run_initializer(root, partitions=3, replication=1)
             self.assertEqual(sum(line.startswith("create ") for line in calls), 4)
             self.assertEqual({line.split()[1] for line in calls if line.startswith("create ")}, set(TOPICS))
@@ -334,7 +332,7 @@ class KafkaTopicInitTests(unittest.TestCase):
             result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             secure_lines = [line for line in log.read_text().splitlines() if line.startswith("SECURE_CONFIG")]
-            self.assertGreaterEqual(len(secure_lines), 4)  # list, create, and describe use secure config
+            self.assertGreaterEqual(len(secure_lines), 4)
             self.assertTrue(all("security.protocol=SASL_SSL" in line and "ssl.endpoint.identification.algorithm=https" in line for line in secure_lines))
             self.assertTrue(all("sasl.mechanism=PLAIN" in line and "wm-client" in line for line in secure_lines))
             self.assertNotIn("S" * 40, result.stdout + result.stderr)

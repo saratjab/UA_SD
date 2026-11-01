@@ -12,13 +12,13 @@ from .kafka_contract import TOPIC_KEYS, encode, message_key
 
 LOGGER = logging.getLogger(__name__)
 
-try:  # The rest of the application remains usable without a broker dependency.
-    from confluent_kafka import Consumer, Producer, KafkaException, TopicPartition  # type: ignore
-except ImportError:  # pragma: no cover - exercised when dependency missing
-    Consumer = Producer = None  # type: ignore
+try:  
+    from confluent_kafka import Consumer, Producer, KafkaException, TopicPartition  
+except ImportError:  
+    Consumer = Producer = None  
     KafkaException = Exception
 
-    class TopicPartition:  # type: ignore[no-redef]
+    class TopicPartition:  
         """Small test-time stand-in; production uses confluent-kafka's class."""
         def __init__(self, topic: str, partition: int, offset: int = -1001) -> None:
             self.topic, self.partition, self.offset = topic, partition, offset
@@ -112,8 +112,6 @@ class KafkaPublisher:
         self._producer = producer
 
     def publish(self, topic: str, message: dict[str, Any], *, key: str | None = None) -> None:
-        # Enforce the application partition-key policy at the shared producer
-        # boundary, including legacy callers and outbox retries.
         if topic in TOPIC_KEYS:
             expected_key = message_key(topic, message)
             if expected_key is None:
@@ -126,9 +124,6 @@ class KafkaPublisher:
             if err:
                 delivered.append(RuntimeError(str(err)))
         self._producer.produce(topic, encode(message), key=key, on_delivery=report)
-        # Commands/results are state-changing. Wait for the delivery callback so a
-        # caller never commits its source offset merely because the record was
-        # accepted into a local client buffer.
         remaining = self._producer.flush(10)
         if remaining:
             raise RuntimeError("Kafka delivery timed out")

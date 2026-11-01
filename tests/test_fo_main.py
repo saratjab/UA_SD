@@ -151,7 +151,6 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
                 mock.patch("WM_FO.WM_FO.threading.Thread", TrackingThread), \
                 mock.patch("builtins.input", side_effect=enter_q) as input_mock, \
                 redirect_stdout(io.StringIO()):
-            # Omit --ws-id exactly as in the interactive Docker invocation.
             self.assertEqual(main(["--kafka-host", "kafka", "--kafka-port", "29092",
                                    "--operator-id", "OP_001"]), 0)
 

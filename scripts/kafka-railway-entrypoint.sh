@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Validate production-only Kafka security and materialize short-lived files.
 set -euo pipefail
 umask 077
 

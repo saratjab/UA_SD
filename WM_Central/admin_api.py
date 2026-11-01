@@ -118,7 +118,7 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
             self.request.settimeout(10.0)
             super().setup()
 
-        def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        def do_GET(self) -> None:
             if not self._authorize():
                 return
             if self.path != "/v1/stations":
@@ -145,7 +145,7 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
                 LOGGER.exception("Central admin could not read station status")
                 self._reply(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal_error"})
 
-        def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        def do_POST(self) -> None:
             if not self._authorize():
                 return
             if self.path != "/v1/control":
@@ -169,8 +169,6 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
                 self._reply(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal_error"})
 
         def _authorize(self) -> bool:
-            # Railway terminates public TLS and sets this header on every HTTPS
-            # request. Check transport before reading or comparing credentials.
             if owner._require_forwarded_https and self.headers.get("X-Forwarded-Proto", "").lower() != "https":
                 self._reply(HTTPStatus.FORBIDDEN, {"error": "https_required"})
                 return False
@@ -230,8 +228,6 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
             self.close_connection = True
 
         def log_message(self, _format: str, *_args: Any) -> None:
-            # BaseHTTPRequestHandler's default log includes raw request text.
-            # Keep a useful audit log without headers, body, or credentials.
             LOGGER.info(
                 "Central admin HTTP method=%s status=%s client=%s",
                 self.command, getattr(self, "_last_status", "handled"), self.client_address[0],
@@ -331,11 +327,11 @@ def _execute_command(owner: CentralAdminServer, body: dict[str, Any], idempotenc
 
 
 STATUS_ANSI = {
-    "AVAILABLE": "32",       # green
-    "WATERING": "1;32",      # bold green; marker below remains visible if blink is unsupported
-    "LEAK": "31",            # red
-    "OUT_OF_SERVICE": "38;5;208",  # orange
-    "DISCONNECTED": "90",    # gray
+    "AVAILABLE": "32",
+    "WATERING": "1;32",
+    "LEAK": "31",
+    "OUT_OF_SERVICE": "38;5;208",
+    "DISCONNECTED": "90",
 }
 
 

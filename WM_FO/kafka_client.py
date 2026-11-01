@@ -27,9 +27,6 @@ class FieldOperator:
     ) -> None:
         self.operator_id = operator_id
         self.publisher = publisher
-        # Stable per-operator offsets let a restarted terminal resume events
-        # produced after its last successful commit. Different operators keep
-        # independent groups and therefore cannot consume one another's results.
         self._consumer_group_id = consumer_group_id or f"wm-field-operator-{operator_id}-v1"
         self.station_id = station_id
         self._lock = threading.RLock()
@@ -143,9 +140,6 @@ class FieldOperator:
             is_terminal = isinstance(request_id, str) and event_type in TERMINAL_EVENTS
             if is_terminal and request_id in self._shown_terminal_request_ids:
                 return True
-            # A completion can be waiting at the group's committed offset after
-            # this FO process died. Show it even though the new process has no
-            # in-memory waiter for the old request.
             recoverable = is_terminal
             if waiter is None and not recoverable:
                 return True

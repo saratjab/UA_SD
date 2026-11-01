@@ -15,7 +15,6 @@ from .models import StationStatus, StationView
 from .state_manager import StateManager
 
 
-# Required by the PDF.
 STATUS_COLOR: dict[StationStatus, str] = {
     StationStatus.AVAILABLE: "GREEN",
     StationStatus.WATERING: "GREEN BLINKING",

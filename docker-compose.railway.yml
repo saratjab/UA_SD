@@ -1,5 +1,3 @@
-# Overlay for the assignment's lab PCs. Central, its database, and Kafka run
-# on Railway; lab machines run only Field Operators or Watering Stations.
 x-kafka-ca-volume: &kafka-ca-volume
   - type: bind
     source: ${KAFKA_CA_CERT_PATH:?Set KAFKA_CA_CERT_PATH in .env.railway}

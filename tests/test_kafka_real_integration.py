@@ -35,7 +35,7 @@ class RealKafkaLifecycleTests(unittest.TestCase):
             central = CentralKafkaService(db, state, central_publisher)
             monitor_server = EngineServer("127.0.0.1", 0, ws_id, hello_timeout=2)
             monitor_server.start()
-            monitor_port = monitor_server.server_sock.getsockname()[1]  # type: ignore[union-attr]
+            monitor_port = monitor_server.server_sock.getsockname()[1]
             config = EngineConfig(ws_id, "127.0.0.1", 9092, "127.0.0.1", monitor_port, 6, 1, .1, .05)
             engine = WateringStationEngine(config)
             engine_service = EngineKafkaService(engine, engine_publisher)
@@ -98,9 +98,9 @@ class RealKafkaLifecycleTests(unittest.TestCase):
                 self.assertTrue(saw_live, f"irrigation never appeared as live (record={record!r})")
                 self.assertTrue(completed, f"timed out waiting for completion (record={record!r})")
                 self.assertIsNotNone(record, "request was not recorded")
-                self.assertEqual(record.status, IrrigationStatus.ENDED)  # type: ignore[union-attr]
-                self.assertIsNotNone(record.started_at)  # type: ignore[union-attr]
-                self.assertIsNotNone(record.ended_at)  # type: ignore[union-attr]
+                self.assertEqual(record.status, IrrigationStatus.ENDED)
+                self.assertIsNotNone(record.started_at)
+                self.assertIsNotNone(record.ended_at)
                 self.assertIsNone(db.get_live_irrigation(ws_id))
             finally:
                 request_publisher.close()

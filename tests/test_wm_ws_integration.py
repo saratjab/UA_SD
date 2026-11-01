@@ -25,10 +25,10 @@ from WM_WS.WM_WS_M.ws_e_server import EngineServer
 def wait_until(predicate: object, timeout: float = 3.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if predicate():  # type: ignore[operator]
+        if predicate():
             return True
         time.sleep(0.01)
-    return bool(predicate())  # type: ignore[operator]
+    return bool(predicate())
 
 
 class WMWSIntegrationTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class WMWSIntegrationTests(unittest.TestCase):
 
         self.engine_server = EngineServer("127.0.0.1", 0, "WS_INT", hello_timeout=0.2)
         self.engine_server.start()
-        engine_port = self.engine_server.server_sock.getsockname()[1]  # type: ignore[union-attr]
+        engine_port = self.engine_server.server_sock.getsockname()[1]
         config = MonitorConfig(
             ws_id="WS_INT",
             location="Integration Garden",
@@ -95,9 +95,7 @@ class WMWSIntegrationTests(unittest.TestCase):
     def test_fault_lifecycle_and_engine_reconnection(self) -> None:
         self.assertTrue(wait_until(lambda: self.state.status_of("WS_INT") is StationStatus.AVAILABLE))
         view = self.state.snapshot()[0]
-        self.assertEqual(view.location, "Integration Garden")  # registration carries location
-        # Central registration can complete just before the independent Engine
-        # HELLO_ACK reaches its client loop; wait for that asynchronous update.
+        self.assertEqual(view.location, "Integration Garden")
         self.assertTrue(wait_until(lambda: self.engine.config.ws_id == "WS_INT"))
 
         self.assertTrue(self.engine.request_irrigation("operator-1", duration_seconds=1.0))
@@ -107,9 +105,9 @@ class WMWSIntegrationTests(unittest.TestCase):
         self.engine.simulate_failure()
         self.assertFalse(self.valve.is_open)
         self.assertTrue(self.engine.irrigation.wait_until_finished(timeout=2))
-        self.assertEqual(self.engine.irrigation.last_result.stopped_by, "manual")  # type: ignore[union-attr]
+        self.assertEqual(self.engine.irrigation.last_result.stopped_by, "manual")
         self.assertTrue(wait_until(lambda: self.state.status_of("WS_INT") is StationStatus.LEAK))
-        self.assertTrue(self.monitor_thread.is_alive())  # fault does not terminate Monitor
+        self.assertTrue(self.monitor_thread.is_alive())
 
         old_socket = self.engine.monitor_socket
         self.engine._disconnect_monitor()

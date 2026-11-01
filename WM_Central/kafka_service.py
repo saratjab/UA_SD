@@ -78,7 +78,7 @@ class CentralKafkaService:
             return True
         except MessageValidationError as exc:
             LOGGER.warning("Discarding malformed activation request: %s", exc)
-            return True  # poison messages must not block a partition forever
+            return True
 
     def handle_available_stations_request(self, message: dict[str, Any]) -> None:
         """Return a current, Central-sourced list to one active operator."""
@@ -209,8 +209,6 @@ class CentralKafkaService:
                     request_id, duration_s=duration, total_volume_l=volume, ended_at=message["timestamp"]
                 )
                 self.state.update_telemetry(ws_id, 0.0, volume)
-                # A repeated completion after the terminal transition still needs
-                # to recreate/flush its stable notification if a prior publish failed.
                 for row in outgoing:
                     self.db.add_outgoing(*row)
             self.flush_outbox()

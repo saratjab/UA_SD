@@ -67,8 +67,6 @@ run_topics() {
 [[ "$replication" =~ ^[1-9][0-9]*$ ]] || { echo "KAFKA_REPLICATION_FACTOR must be a positive integer" >&2; exit 2; }
 
 for topic in wm.activation.requests wm.ws.commands wm.ws.events wm.operator.events; do
-    # --list is the authoritative existence check. In Kafka 3.8, --describe for
-    # a missing topic can exit successfully while printing Optional[topic] text.
     topic_list="$(run_topics --bootstrap-server "$bootstrap" --list)"
     if ! printf '%s\n' "$topic_list" | grep -Fqx -- "$topic"; then
         run_topics --bootstrap-server "$bootstrap" --create --if-not-exists \
@@ -88,9 +86,6 @@ for topic in wm.activation.requests wm.ws.commands wm.ws.events wm.operator.even
         exit 1
     fi
     if (( current < partitions )); then
-        # Kafka only supports increasing partition counts. Existing records and
-        # consumer offsets are left untouched; old keyed records may map to new
-        # partitions differently after this explicit migration.
         run_topics --bootstrap-server "$bootstrap" --alter --topic "$topic" --partitions "$partitions"
     fi
 done

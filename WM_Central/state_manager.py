@@ -59,7 +59,7 @@ class RegisterOutcome:
     reason: str | None = None
     ws_id: str | None = None
     enrolled: bool = False
-    replaced: Any = None  # previous connection for the same ws_id; caller must close it
+    replaced: Any = None
 
 
 @dataclass(frozen=True)
@@ -86,8 +86,6 @@ class StateManager:
     def __init__(self, db: Database) -> None:
         self._db = db
         self._lock = threading.RLock()
-        # ws_id -> the connection object that currently represents the station.
-        # Opaque to this class; the socket layer decides what it is.
         self._connections: dict[str, Any] = {}
         self._telemetry: dict[str, tuple[float | None, float | None]] = {}
 
@@ -97,10 +95,6 @@ class StateManager:
                     None,
                     irrigation.total_volume_l,
                 )
-
-    # ------------------------------------------------------------------
-    # Connectivity (Monitor <-> Central socket)
-    # ------------------------------------------------------------------
 
     def register(self, ws_id: str, location: str | None, connection: Any) -> RegisterOutcome:
         ws_id = ws_id.strip()
@@ -147,10 +141,6 @@ class StateManager:
     def irrigation(self, request_id: str):
         return self._db.get_irrigation(request_id)
 
-    # ------------------------------------------------------------------
-    # Faults
-    # ------------------------------------------------------------------
-
     def report_fault(
         self,
         ws_id: str,
@@ -180,10 +170,6 @@ class StateManager:
             LOGGER.info("WS %s fault resolved", ws_id)
         return resolved
 
-    # ------------------------------------------------------------------
-    # CENTRAL commands (state side; Kafka delivery comes later)
-    # ------------------------------------------------------------------
-
     def block_station(self, ws_id: str, outgoing=None) -> CommandOutcome:
         """BLOCK WS: end any irrigation in progress, then OUT OF SERVICE."""
         with self._lock:
@@ -201,10 +187,6 @@ class StateManager:
         if ok:
             LOGGER.info("WS %s ACTIVATED", ws_id)
         return CommandOutcome(ok)
-
-    # ------------------------------------------------------------------
-    # Read side (monitoring panel, authorization)
-    # ------------------------------------------------------------------
 
     def status_of(self, ws_id: str) -> StationStatus | None:
         """None if the station is unknown."""

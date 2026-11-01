@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info("Development operators loaded")
 
     state = StateManager(db)
-    log_station_table(LOGGER, state)  # every known station is DISCONNECTED right now
+    log_station_table(LOGGER, state)
 
     kafka_threads: list[threading.Thread] = []
     workers = []
@@ -109,10 +109,9 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 def _poll_worker(worker: object) -> None:
-    # KafkaWorker catches handler failures and leaves the offset uncommitted.
     while True:
         try:
-            worker.poll_once(1.0)  # type: ignore[attr-defined]
+            worker.poll_once(1.0)
         except Exception:
             LOGGER.exception("Kafka worker stopped")
             return

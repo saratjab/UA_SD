@@ -1,7 +1,3 @@
-# Reusable single-station deployment for Railway Central + Kafka.
-# Launch each WS under a distinct Compose project name (scripts/run-ws.sh).
-# No ports are published to the host; Engine reaches Monitor on the private
-# Compose network at monitor:6001. Every project has a private network/volume.
 x-app-defaults: &app-defaults
   image: watermanagement-app:local
   build:
@@ -16,7 +12,7 @@ services:
     command:
       - python
       - -m
-      - WM_WS.WM_WS_M.main
+      - WM_WS.WM_WS_M.WM_WS_M
       - --ws-id
       - "${WS_ID:?Set WS_ID}"
       - --location
@@ -37,7 +33,7 @@ services:
     command:
       - python
       - -m
-      - WM_WS.WM_WS_E.main
+      - WM_WS.WM_WS_E.WM_WS_E
       - --ws-id
       - "${WS_ID:?Set WS_ID}"
       - --kafka-host
@@ -58,7 +54,6 @@ services:
       KAFKA_SASL_MECHANISM: "${KAFKA_SASL_MECHANISM:-PLAIN}"
       KAFKA_SASL_USERNAME: "${KAFKA_SASL_USERNAME:?Set KAFKA_SASL_USERNAME in .env.railway}"
       KAFKA_SASL_PASSWORD: "${KAFKA_SASL_PASSWORD:?Set KAFKA_SASL_PASSWORD in .env.railway}"
-      # Always use the container path, never a path from the host OS.
       KAFKA_SSL_CA_LOCATION: /run/secrets/kafka/ca.pem
       KAFKA_SSL_CA_PEM: "${KAFKA_SSL_CA_PEM:-}"
     volumes:

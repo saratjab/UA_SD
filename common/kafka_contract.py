@@ -22,17 +22,12 @@ TOPIC_KEYS = {
 def message_key(topic: str, message: dict[str, Any]) -> str | None:
     """Return the per-entity partition key assigned to a topic."""
     if topic == ACTIVATION_REQUESTS and message.get("event_type") == "AVAILABLE_STATIONS_REQUEST":
-        # Discovery requests have no station identity yet; keep them ordered by
-        # their requesting operator while ordinary activation requests remain
-        # keyed by station ID.
         value = message.get("operator_id")
         return value if isinstance(value, str) and value else None
     field = TOPIC_KEYS.get(topic)
     value = message.get(field) if field else None
     return value if isinstance(value, str) and value else None
 
-# Reasons an Engine may include in COMMAND_REJECTED. Keep Engine output,
-# Central validation, and persisted denial values aligned.
 COMMAND_REJECTION_REASONS = frozenset({
     "ENGINE_BLOCKED",
     "ENGINE_FAILED",

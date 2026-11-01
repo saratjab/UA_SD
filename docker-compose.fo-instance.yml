@@ -1,5 +1,3 @@
-# Per-operator override for docker-compose.local.yml + docker-compose.railway.yml.
-# No host ports are published. Each FO is a short-lived interactive container.
 services:
   fo:
     entrypoint: ["python"]
@@ -13,8 +11,6 @@ services:
       - --operator-id
       - "${FO_OPERATOR_ID:?Pass an operator ID to scripts/run-fo.sh}"
     environment:
-      # This is the path INSIDE the container. The Railway overlay mounts the
-      # host certificate at this exact location.
       KAFKA_SSL_CA_LOCATION: /run/secrets/kafka/ca.pem
 
 networks:

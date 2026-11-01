@@ -24,11 +24,8 @@ POLL_SHUTDOWN_TIMEOUT_SECONDS = 3.0
 def _poll_worker(worker: object, ready: threading.Event | None = None,
                  failed: threading.Event | None = None,
                  stop: threading.Event | None = None) -> None:
-    # The initial poll runs in the same thread that will keep consuming.  The
-    # caller may publish only after this poll completes, so no request response
-    # can arrive in the gap between starting the thread and entering poll().
     try:
-        worker.poll_once(0.0)  # type: ignore[attr-defined]
+        worker.poll_once(0.0)
     except Exception:
         LOGGER.exception("Field Operator Kafka worker stopped during startup")
         if failed is not None:
@@ -40,7 +37,7 @@ def _poll_worker(worker: object, ready: threading.Event | None = None,
         ready.set()
     while stop is None or not stop.is_set():
         try:
-            worker.poll_once(1.0)  # type: ignore[attr-defined]
+            worker.poll_once(1.0)
         except Exception:
             LOGGER.exception("Field Operator Kafka worker stopped")
             if failed is not None:
@@ -78,8 +75,6 @@ def _file_mode(operator: FieldOperator, path: str, timeout: float) -> None:
         LOGGER.info("Processing file request %d of %d", index + 1, len(requests))
         duration = request.get("duration_seconds")
         target = request.get("target_volume_liters")
-        # File runs advance only after a terminal result, including a denial.
-        # Indefinite mode therefore waits until the supported manual stop arrives.
         if not _submit_and_wait(operator, request["ws_id"], duration, None, target):
             raise RuntimeError(f"request {request.get('ws_id')} lost its terminal-result waiter; stopping file sequence")
         if index + 1 < len(requests):
@@ -178,7 +173,6 @@ def main(argv: list[str] | None = None) -> int:
                 elif config.ws_id:
                     _submit_and_wait(operator, config.ws_id, config.duration_seconds or 0,
                                      config.request_timeout)
-                    # Keep consuming after the command-line request ends.
                     _interactive_mode(operator, config.request_timeout)
                 else:
                     _interactive_mode(operator, config.request_timeout)

@@ -30,7 +30,7 @@ class ControlAndMonitoringTests(DatabaseTestCase):
         self.state.register("WS_001", "North", object())
         self.state.register("WS_002", "South", object())
         self.publisher = Publisher()
-        self.service = CentralKafkaService(self.db, self.state, self.publisher)  # type: ignore[arg-type]
+        self.service = CentralKafkaService(self.db, self.state, self.publisher)
         self.log = logging.getLogger("central-test")
 
     def test_station_selection_resolves_single_and_all(self) -> None:
@@ -40,8 +40,8 @@ class ControlAndMonitoringTests(DatabaseTestCase):
 
     def test_block_and_activate_target_one_or_all(self) -> None:
         execute_control_line("BLOCK WS_001", self.state, self.service, self.log)
-        self.assertEqual(self.db.get_station("WS_001").admin_state.value, "BLOCKED")  # type: ignore[union-attr]
-        self.assertEqual(self.db.get_station("WS_002").admin_state.value, "ACTIVE")  # type: ignore[union-attr]
+        self.assertEqual(self.db.get_station("WS_001").admin_state.value, "BLOCKED")
+        self.assertEqual(self.db.get_station("WS_002").admin_state.value, "ACTIVE")
         execute_control_line("ACTIVATE all", self.state, self.service, self.log)
         self.assertTrue(all(s.admin_state.value == "ACTIVE" for s in self.db.list_stations()))
         block_commands = [m for topic, m in self.publisher.records if topic == WS_COMMANDS and m["event_type"] == "BLOCK_WS"]
@@ -53,7 +53,7 @@ class ControlAndMonitoringTests(DatabaseTestCase):
         execute_control_line("START WS_001 8 OP_001", self.state, self.service, self.log)
         command = next(m for topic, m in self.publisher.records if topic == WS_COMMANDS)
         record = self.db.get_irrigation(command["request_id"])
-        self.assertEqual(record.status, IrrigationStatus.AUTHORIZED)  # type: ignore[union-attr]
+        self.assertEqual(record.status, IrrigationStatus.AUTHORIZED)
         self.assertEqual(command["event_type"], "START_IRRIGATION")
         self.assertEqual(command["payload"], {"duration_seconds": 8})
         self.assertTrue(command["request_id"])
@@ -116,7 +116,7 @@ class ControlAndMonitoringTests(DatabaseTestCase):
 
     def test_menu_station_and_all_station_controls(self) -> None:
         execute_menu_choice("4", self.state, self.service, self.log, input_fn=lambda _: "WS_001")
-        self.assertEqual(self.db.get_station("WS_001").admin_state.value, "BLOCKED")  # type: ignore[union-attr]
+        self.assertEqual(self.db.get_station("WS_001").admin_state.value, "BLOCKED")
         execute_menu_choice("5", self.state, self.service, self.log)
         self.assertTrue(all(s.admin_state.value == "BLOCKED" for s in self.db.list_stations()))
         execute_menu_choice("6", self.state, self.service, self.log, input_fn=lambda _: "WS_001")

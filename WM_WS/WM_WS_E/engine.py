@@ -56,9 +56,6 @@ class WateringStationEngine:
     def close(self) -> None:
         self._stop_event.set()
         self._monitor_ready.clear()
-        # Shutting down the Engine must leave the actuator in its safe state.
-        # Closing the Monitor socket alone would let an in-flight irrigation
-        # thread keep the valve open until its scheduled duration elapsed.
         self.irrigation.emergency_stop()
         if self.monitor_socket is not None:
             self.monitor_socket.close()
@@ -68,7 +65,7 @@ class WateringStationEngine:
         conn = sock or self._require_monitor_socket()
         LOGGER.info("HELLO_WS_E sent")
         hello: dict[str, object] = {"type": protocol.HELLO_WS_E, "component": "WM_WS_E"}
-        if self.config.ws_id is not None:  # compatibility with pre-assigned Engines
+        if self.config.ws_id is not None:
             hello["ws_id"] = self.config.ws_id
         protocol.send_message(conn, hello)
         response = protocol.receive_message(conn)
@@ -192,8 +189,6 @@ class WateringStationEngine:
         return self.monitor_socket
 
     def _disconnect_monitor(self) -> None:
-        # Losing the Monitor removes the Engine's health/control path. Close the
-        # actuator immediately; the controller still emits its final reading.
         self._monitor_ready.clear()
         self.irrigation.emergency_stop(reason="monitor_disconnected")
         if self.monitor_socket is not None:

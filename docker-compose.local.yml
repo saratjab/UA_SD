@@ -43,8 +43,6 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
       - ./config/kafka:/mnt/shared/config:ro
-    # Preserve the stable Compose service name while allowing the advertised
-    # broker hostname to be configured for this private network.
     networks:
       watermanagement:
         aliases:

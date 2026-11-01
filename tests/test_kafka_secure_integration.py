@@ -145,8 +145,6 @@ class SecureKafkaIntegrationTests(unittest.TestCase):
                 with self.assertRaises(Exception):
                     wrong_host_admin.list_topics(timeout=3)
 
-                # Exercise the production entrypoint's startup checks too: it
-                # must reject an unrelated trust anchor and a non-exact SAN.
                 mismatch_ext = root / "mismatch.ext"
                 mismatch_ext.write_text("subjectAltName=DNS:other.example\nextendedKeyUsage=serverAuth\n"
                                         "keyUsage=digitalSignature,keyEncipherment\n")

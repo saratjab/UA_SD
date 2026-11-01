@@ -89,7 +89,7 @@ class EngineKafkaService:
                 raise MessageValidationError("invalid START_IRRIGATION")
             with self._lock:
                 if self._store.execute("SELECT 1 FROM engine_requests WHERE request_id=?", (request_id,)).fetchone():
-                    return  # duplicate start, including a request interrupted on a previous process
+                    return
                 if self._request_id is not None or self.engine.irrigation.state.value != "IDLE":
                     return
                 self._request_id, self._operator_id, self._sequence, self._end_reason = request_id, operator_id, 0, "MANUAL_STOP"

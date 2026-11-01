@@ -27,7 +27,6 @@ class CentralConfig:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="WaterManagement Central (WM_Central)")
-    # --- required by the PDF ------------------------------------------------
     parser.add_argument(
         "--socket-port", type=int,
         default=os.environ.get("CENTRAL_SOCKET_PORT", str(DEFAULT_SOCKET_PORT)),
@@ -38,7 +37,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--kafka-port", type=int, default=os.environ.get("KAFKA_PORT", str(DEFAULT_KAFKA_PORT)),
         help=f"Kafka Broker/Bootstrap port (default: $KAFKA_PORT or {DEFAULT_KAFKA_PORT})",
     )
-    # --- our additions (all optional) ---------------------------------------
     parser.add_argument(
         "--socket-host", default=os.environ.get("CENTRAL_SOCKET_HOST", "0.0.0.0"),
         help="Interface to bind the socket server to (default: all interfaces)",

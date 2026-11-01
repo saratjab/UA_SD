@@ -39,9 +39,6 @@ class EngineServer:
             try:
                 conn, address = server_sock.accept()
             except OSError:
-                # A peer may disappear while TCP is accepting it.  That is not
-                # a Monitor failure; continue accepting unless the listener was
-                # deliberately closed.
                 if self.server_sock is None or server_sock.fileno() < 0:
                     raise
                 LOGGER.warning("Transient error accepting WM_WS_E connection", exc_info=True)
@@ -87,8 +84,6 @@ class EngineServer:
                 pass
 
     def _is_valid_hello(self, message: dict[str, object]) -> bool:
-        # An Engine does not know its station assignment until HELLO_ACK.  A
-        # legacy Engine may include ws_id, but it must match when present.
         return (
             message.get("type") == protocol.HELLO_WS_E
             and message.get("component") == "WM_WS_E"

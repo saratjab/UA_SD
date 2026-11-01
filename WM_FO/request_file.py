@@ -45,7 +45,6 @@ def load_requests(path: str | Path) -> list[dict[str, Any]]:
             raise ValueError("request file must contain at least one request")
         return [_validate(item, i) for i, item in enumerate(data, start=1)]
 
-    # A complete JSON object is accepted as the existing one-request format.
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
