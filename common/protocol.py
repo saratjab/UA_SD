@@ -19,30 +19,22 @@ STX = 0x02
 ETX = 0x03
 MAX_DATA_SIZE = 1024 * 1024
 
-
-# --------------------------------------------------------------------------
-# Message types (the contract - never rename silently)
-# --------------------------------------------------------------------------
-
-# Monitor <-> Engine
 HELLO_WS_E = "HELLO_WS_E"
 HELLO_ACK = "HELLO_ACK"
 HEALTH_CHECK = "HEALTH_CHECK"
 HEALTH_OK = "HEALTH_OK"
 HEALTH_KO = "HEALTH_KO"
 
-# Monitor -> Central (and Central's answers)
-REGISTER_WS = "REGISTER_WS"          # {ws_id, location}
-REGISTER_ACK = "REGISTER_ACK"        # {ws_id}
-REGISTER_NACK = "REGISTER_NACK"      # {reason}
-WS_E_FAULT = "WS_E_FAULT"            # {ws_id, component, fault, details, timestamp}
-WS_E_FAULT_RESOLVED = "WS_E_FAULT_RESOLVED"  # PROPOSED: {ws_id, timestamp}
-FAULT_ACK = "FAULT_ACK"              # {ws_id}
-FAULT_NACK = "FAULT_NACK"            # {reason}
+REGISTER_WS = "REGISTER_WS"
+REGISTER_ACK = "REGISTER_ACK"
+REGISTER_NACK = "REGISTER_NACK"
+WS_E_FAULT = "WS_E_FAULT"
+WS_E_FAULT_RESOLVED = "WS_E_FAULT_RESOLVED"
+FAULT_ACK = "FAULT_ACK"
+FAULT_NACK = "FAULT_NACK"
 
-# Generic
 ACK = "ACK"
-NACK = "NACK"                        # {reason}
+NACK = "NACK"
 
 
 class ProtocolError(Exception):
@@ -60,10 +52,6 @@ class MalformedFrameError(ProtocolError):
 class ConnectionClosedError(ProtocolError):
     """Raised when the socket closes while reading a frame."""
 
-
-# --------------------------------------------------------------------------
-# Framing
-# --------------------------------------------------------------------------
 
 def calculate_lrc(data: bytes) -> int:
     lrc = 0
@@ -145,10 +133,6 @@ def receive_message(sock: socket.socket) -> dict[str, Any]:
 def send_message(sock: socket.socket, message: dict[str, Any]) -> None:
     sock.sendall(create_frame(message))
 
-
-# --------------------------------------------------------------------------
-# Message builders
-# --------------------------------------------------------------------------
 
 def ack_message() -> dict[str, str]:
     return {"type": ACK}

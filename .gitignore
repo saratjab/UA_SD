@@ -1,8 +1,14 @@
 __pycache__/
 *.py[cod]
 .venv/
+venv/
 .pytest_cache/
 .DS_Store
+.env.railway
+/secrets/
+*.pem
+*.crt
+*.cer
 *.db
 *.db-wal
 *.db-shm

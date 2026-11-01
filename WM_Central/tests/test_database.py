@@ -59,10 +59,10 @@ class SchemaTests(DatabaseTestCase):
             migrated = Database(path)
             try:
                 migrated.initialize()
-                self.assertEqual(migrated.get_irrigation("legacy").status, IrrigationStatus.AUTHORIZED)  # type: ignore[union-attr]
+                self.assertEqual(migrated.get_irrigation("legacy").status, IrrigationStatus.AUTHORIZED)
                 preserved_denial = migrated.get_irrigation("legacy-denied")
-                self.assertEqual(preserved_denial.status, IrrigationStatus.DENIED)  # type: ignore[union-attr]
-                self.assertEqual(preserved_denial.deny_reason, DenyReason.ENGINE_BLOCKED)  # type: ignore[union-attr]
+                self.assertEqual(preserved_denial.status, IrrigationStatus.DENIED)
+                self.assertEqual(preserved_denial.deny_reason, DenyReason.ENGINE_BLOCKED)
                 self.assertTrue(migrated.reject_authorized_irrigation("legacy", DenyReason.ENGINE_FAILED))
                 migrated.add_operator("OP_002")
                 migrated.register_station("WS_002", "South")
@@ -195,7 +195,7 @@ class IrrigationTests(DatabaseTestCase):
     def test_full_lifecycle(self) -> None:
         self.request("r1")
         self.assertTrue(self.db.mark_irrigation_started("r1"))
-        self.assertFalse(self.db.mark_irrigation_started("r1"))  # already WATERING
+        self.assertFalse(self.db.mark_irrigation_started("r1"))
         self.assertEqual(self.db.get_live_irrigation("WS_001").status, IrrigationStatus.WATERING)
 
         self.assertTrue(
@@ -205,7 +205,7 @@ class IrrigationTests(DatabaseTestCase):
         self.assertEqual(record.status, IrrigationStatus.ENDED)
         self.assertEqual((record.end_reason, record.total_volume_l), (EndReason.DURATION, 6.0))
         self.assertIsNone(self.db.get_live_irrigation("WS_001"))
-        self.assertFalse(self.db.end_irrigation("r1", EndReason.MANUAL))  # idempotent
+        self.assertFalse(self.db.end_irrigation("r1", EndReason.MANUAL))
         self.assertEqual(self.db.get_irrigation("r1").end_reason, EndReason.DURATION)
 
     def test_station_is_free_again_after_the_end(self) -> None:
@@ -219,11 +219,11 @@ class IrrigationTests(DatabaseTestCase):
         self.assertEqual((ended.request_id, ended.end_reason), ("r1", EndReason.BLOCKED))
         self.assertIsNone(self.db.end_live_irrigation("WS_001", EndReason.BLOCKED))
 
-    def test_startup_recovery_closes_live_irrigations(self) -> None:
+    def test_startup_recovery_preserves_authorization_for_durable_start_replay(self) -> None:
         self.request("r1")
-        self.assertEqual(self.db.recover_open_irrigations(), 1)
+        self.assertEqual(self.db.recover_open_irrigations(), 0)
         record = self.db.get_irrigation("r1")
-        self.assertEqual(record.end_reason, EndReason.CENTRAL_RESTART)
+        self.assertEqual(record.status, IrrigationStatus.AUTHORIZED)
 
     def test_startup_recovery_preserves_watering_for_replayed_engine_events(self) -> None:
         self.request("r1")
@@ -231,7 +231,7 @@ class IrrigationTests(DatabaseTestCase):
         self.assertEqual(self.db.recover_open_irrigations(), 0)
         record = self.db.get_irrigation("r1")
         self.assertEqual(record.status, IrrigationStatus.WATERING)
-        self.assertEqual(self.db.get_live_irrigation("WS_001").request_id, "r1")  # type: ignore[union-attr]
+        self.assertEqual(self.db.get_live_irrigation("WS_001").request_id, "r1")
 
     def test_unknown_operator_violates_foreign_key(self) -> None:
         with self.assertRaises(sqlite3.IntegrityError):

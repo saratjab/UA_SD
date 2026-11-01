@@ -11,8 +11,23 @@ WS_COMMANDS = "wm.ws.commands"
 WS_EVENTS = "wm.ws.events"
 OPERATOR_EVENTS = "wm.operator.events"
 
-# Reasons an Engine may include in COMMAND_REJECTED. Keep Engine output,
-# Central validation, and persisted denial values aligned.
+TOPIC_KEYS = {
+    ACTIVATION_REQUESTS: "ws_id",
+    WS_COMMANDS: "ws_id",
+    WS_EVENTS: "ws_id",
+    OPERATOR_EVENTS: "operator_id",
+}
+
+
+def message_key(topic: str, message: dict[str, Any]) -> str | None:
+    """Return the per-entity partition key assigned to a topic."""
+    if topic == ACTIVATION_REQUESTS and message.get("event_type") == "AVAILABLE_STATIONS_REQUEST":
+        value = message.get("operator_id")
+        return value if isinstance(value, str) and value else None
+    field = TOPIC_KEYS.get(topic)
+    value = message.get(field) if field else None
+    return value if isinstance(value, str) and value else None
+
 COMMAND_REJECTION_REASONS = frozenset({
     "ENGINE_BLOCKED",
     "ENGINE_FAILED",

@@ -1,0 +1,71 @@
+x-app-defaults: &app-defaults
+  image: watermanagement-app:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+  init: true
+  restart: unless-stopped
+
+services:
+  monitor:
+    <<: *app-defaults
+    command:
+      - python
+      - -m
+      - WM_WS.WM_WS_M.WM_WS_M
+      - --ws-id
+      - "${WS_ID:?Set WS_ID}"
+      - --location
+      - "${WS_LOCATION:?Set WS_LOCATION}"
+      - --central-host
+      - "${CENTRAL_HOST:?Set CENTRAL_HOST in .env.railway}"
+      - --central-port
+      - "${CENTRAL_PORT:?Set CENTRAL_PORT in .env.railway}"
+      - --engine-host
+      - 0.0.0.0
+      - --engine-port
+      - "6001"
+
+  engine:
+    <<: *app-defaults
+    stdin_open: true
+    tty: true
+    command:
+      - python
+      - -m
+      - WM_WS.WM_WS_E.WM_WS_E
+      - --ws-id
+      - "${WS_ID:?Set WS_ID}"
+      - --kafka-host
+      - "${KAFKA_HOST:?Set KAFKA_HOST in .env.railway}"
+      - --kafka-port
+      - "${KAFKA_PORT:?Set KAFKA_PORT in .env.railway}"
+      - --monitor-host
+      - monitor
+      - --monitor-port
+      - "6001"
+      - --state-path
+      - "/engine-state/.wm_ws_e_${WS_ID:?Set WS_ID}.sqlite3"
+      - --local-operator-id
+      - "${LOCAL_OPERATOR_ID:?Set LOCAL_OPERATOR_ID}"
+    environment:
+      KAFKA_REQUIRE_SECURITY: "${KAFKA_REQUIRE_SECURITY:-true}"
+      KAFKA_SECURITY_PROTOCOL: "${KAFKA_SECURITY_PROTOCOL:-SASL_SSL}"
+      KAFKA_SASL_MECHANISM: "${KAFKA_SASL_MECHANISM:-PLAIN}"
+      KAFKA_SASL_USERNAME: "${KAFKA_SASL_USERNAME:?Set KAFKA_SASL_USERNAME in .env.railway}"
+      KAFKA_SASL_PASSWORD: "${KAFKA_SASL_PASSWORD:?Set KAFKA_SASL_PASSWORD in .env.railway}"
+      KAFKA_SSL_CA_LOCATION: /run/secrets/kafka/ca.pem
+      KAFKA_SSL_CA_PEM: "${KAFKA_SSL_CA_PEM:-}"
+    volumes:
+      - type: bind
+        source: "${KAFKA_CA_CERT_PATH:?Set KAFKA_CA_CERT_PATH in .env.railway}"
+        target: /run/secrets/kafka/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - engine-state:/engine-state
+    depends_on:
+      - monitor
+
+volumes:
+  engine-state:

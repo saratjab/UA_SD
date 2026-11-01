@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import logging
+import math
 import threading
 import time
 from typing import Callable
@@ -23,7 +24,8 @@ class IrrigationState(str, Enum):
 @dataclass(frozen=True)
 class IrrigationRequest:
     operator_id: str
-    duration_seconds: float
+    duration_seconds: float | None = None
+    target_volume_liters: float | None = None
     request_id: str = ""
 
 
@@ -74,8 +76,12 @@ class IrrigationController:
         self._thread: threading.Thread | None = None
 
     def start(self, request: IrrigationRequest) -> bool:
-        if request.duration_seconds <= 0:
+        if request.duration_seconds is not None and request.target_volume_liters is not None:
+            raise ValueError("choose duration or target volume, not both")
+        if request.duration_seconds is not None and (not math.isfinite(request.duration_seconds) or request.duration_seconds <= 0):
             raise ValueError("irrigation duration must be positive")
+        if request.target_volume_liters is not None and (not math.isfinite(request.target_volume_liters) or request.target_volume_liters <= 0):
+            raise ValueError("irrigation target volume must be positive")
 
         with self._lock:
             if self.state != IrrigationState.IDLE:
@@ -87,10 +93,10 @@ class IrrigationController:
             self._stop_event.clear()
             self._stop_reason = "manual"
             self.valve.open()
-            LOGGER.info(
-                "Irrigation started operator_id=%s duration_seconds=%.3f",
-                request.operator_id, request.duration_seconds,
-            )
+            mode = (f"duration_seconds={request.duration_seconds}" if request.duration_seconds is not None else
+                    f"target_volume_liters={request.target_volume_liters}" if request.target_volume_liters is not None else
+                    "manual_stop")
+            LOGGER.info("Irrigation started operator_id=%s mode=%s", request.operator_id, mode)
             self._thread = threading.Thread(
                 target=self._run,
                 args=(request,),
@@ -133,12 +139,23 @@ class IrrigationController:
         return self._build_telemetry(operator_id, reading, state, final=False)
 
     def _run(self, request: IrrigationRequest) -> None:
-        stopped_by = "duration"
-        while self.flow_meter.duration_seconds < request.duration_seconds:
+        stopped_by = "manual"
+        while True:
             if self._stop_event.is_set():
                 stopped_by = self._stop_reason
                 break
-            step = min(self.telemetry_interval, request.duration_seconds - self.flow_meter.duration_seconds)
+            if request.duration_seconds is not None and self.flow_meter.duration_seconds >= request.duration_seconds:
+                stopped_by = "duration"
+                break
+            if request.target_volume_liters is not None and self.flow_meter.accumulated_volume_liters >= request.target_volume_liters:
+                stopped_by = "target_volume"
+                break
+            step = self.telemetry_interval
+            if request.duration_seconds is not None:
+                step = min(step, request.duration_seconds - self.flow_meter.duration_seconds)
+            if request.target_volume_liters is not None and self.flow_meter.flow_rate_lpm > 0:
+                liters_left = request.target_volume_liters - self.flow_meter.accumulated_volume_liters
+                step = min(step, liters_left * 60.0 / self.flow_meter.flow_rate_lpm)
             self.sleep_func(step)
             if self._stop_event.is_set():
                 stopped_by = self._stop_reason

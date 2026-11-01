@@ -56,9 +56,6 @@ class WateringStationEngine:
     def close(self) -> None:
         self._stop_event.set()
         self._monitor_ready.clear()
-        # Shutting down the Engine must leave the actuator in its safe state.
-        # Closing the Monitor socket alone would let an in-flight irrigation
-        # thread keep the valve open until its scheduled duration elapsed.
         self.irrigation.emergency_stop()
         if self.monitor_socket is not None:
             self.monitor_socket.close()
@@ -68,7 +65,7 @@ class WateringStationEngine:
         conn = sock or self._require_monitor_socket()
         LOGGER.info("HELLO_WS_E sent")
         hello: dict[str, object] = {"type": protocol.HELLO_WS_E, "component": "WM_WS_E"}
-        if self.config.ws_id is not None:  # compatibility with pre-assigned Engines
+        if self.config.ws_id is not None:
             hello["ws_id"] = self.config.ws_id
         protocol.send_message(conn, hello)
         response = protocol.receive_message(conn)
@@ -168,17 +165,16 @@ class WateringStationEngine:
         self.failed = False
         LOGGER.info("Simulated KO cleared")
 
-    def request_irrigation(self, operator_id: str, duration_seconds: float | None = None) -> bool:
+    def request_irrigation(self, operator_id: str, duration_seconds: float | None = None,
+                           target_volume_liters: float | None = None) -> bool:
         if not self._monitor_ready.is_set():
             LOGGER.warning("Irrigation rejected while WM_WS_M is unavailable")
             return False
         if self.failed or self.blocked:
             LOGGER.warning("Irrigation rejected while Engine is failed")
             return False
-        duration = duration_seconds
-        if duration is None:
-            duration = self.config.default_irrigation_duration
-        request = IrrigationRequest(operator_id=operator_id, duration_seconds=duration)
+        request = IrrigationRequest(operator_id=operator_id, duration_seconds=duration_seconds,
+                                    target_volume_liters=target_volume_liters)
         return self.irrigation.start(request)
 
     def stop_irrigation(self) -> bool:
@@ -193,8 +189,6 @@ class WateringStationEngine:
         return self.monitor_socket
 
     def _disconnect_monitor(self) -> None:
-        # Losing the Monitor removes the Engine's health/control path. Close the
-        # actuator immediately; the controller still emits its final reading.
         self._monitor_ready.clear()
         self.irrigation.emergency_stop(reason="monitor_disconnected")
         if self.monitor_socket is not None:

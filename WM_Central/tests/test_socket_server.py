@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import socket
 import unittest
+from unittest.mock import patch
 
 from common import protocol
 from WM_Central.models import EndReason, StationStatus
-from WM_Central.socket_server import CentralSocketServer
+from WM_Central.socket_server import CentralSocketServer, MonitorConnection
 from WM_Central.state_manager import StateManager
 
 from .helpers import DatabaseTestCase, wait_until
@@ -28,8 +29,6 @@ class SocketServerTestCase(DatabaseTestCase):
         )
         self.server.start()
         self.addCleanup(self.server.stop)
-
-    # --- helpers -----------------------------------------------------------
 
     def connect(self) -> socket.socket:
         sock = socket.create_connection(("127.0.0.1", self.server.port), timeout=3.0)
@@ -65,7 +64,7 @@ class RegistrationTests(SocketServerTestCase):
 
     def test_new_station_without_location_is_rejected_and_closed(self) -> None:
         sock = self.connect()
-        reply = self.call(sock, {"type": "REGISTER_WS", "ws_id": "WS_001"})  # old Monitor format
+        reply = self.call(sock, {"type": "REGISTER_WS", "ws_id": "WS_001"})
         self.assertEqual(reply, {"type": "REGISTER_NACK", "reason": "missing_location"})
         self.assert_closed(sock)
         self.assertIsNone(self.status())
@@ -88,13 +87,12 @@ class RegistrationTests(SocketServerTestCase):
         self.assertEqual(again["type"], "REGISTER_ACK")
         other = self.call(sock, protocol.register_ws_message("WS_002", "East"))
         self.assertEqual(other, {"type": "REGISTER_NACK", "reason": "already_registered"})
-        self.assertEqual(self.status(), A.AVAILABLE)  # the connection is still fine
+        self.assertEqual(self.status(), A.AVAILABLE)
 
     def test_second_connection_replaces_the_first(self) -> None:
         first = self.registered()
         second = self.registered()
         self.assert_closed(first)
-        # the old socket's cleanup must not disconnect the new registration
         self.assertFalse(wait_until(lambda: self.status() == A.DISCONNECTED, timeout=0.5))
         self.assertEqual(self.status(), A.AVAILABLE)
         reply = self.call(second, protocol.fault_resolved_message("WS_001", "t"))
@@ -189,7 +187,6 @@ class BadInputTests(SocketServerTestCase):
         sock = self.registered()
         sock.sendall(self.bad_lrc_frame())
         self.assertEqual(protocol.receive_message(sock), {"type": "NACK", "reason": "invalid_lrc"})
-        # the connection survives: the next valid message works
         reply = self.call(sock, protocol.fault_message("WS_001", "timeout", "d", "t"))
         self.assertEqual(reply["type"], "FAULT_ACK")
 
@@ -216,6 +213,42 @@ class BadInputTests(SocketServerTestCase):
         sock = self.connect()
         self.assertEqual(self.call(sock, {"type": "HELLO"})["reason"], "unknown_type")
         self.assert_closed(sock)
+
+
+class SocketFailureVisibilityTests(unittest.TestCase):
+    def test_monitor_response_uses_bounded_write_timeout_and_restores_read_timeout(self) -> None:
+        first, second = socket.socketpair()
+        try:
+            first.settimeout(None)
+            connection = MonitorConnection(first, ("127.0.0.1", 1234))
+            write_timeouts: list[float | None] = []
+            with patch(
+                "WM_Central.socket_server.protocol.send_message",
+                side_effect=lambda sock, _message: write_timeouts.append(sock.gettimeout()),
+            ) as send:
+                connection.send({"type": "ACK"})
+            self.assertEqual(write_timeouts, [5.0])
+            self.assertEqual(send.call_count, 1)
+            self.assertIsNone(first.gettimeout())
+        finally:
+            first.close()
+            second.close()
+
+    def test_send_failure_includes_monitor_context_in_log(self) -> None:
+        class FailedConnection:
+            address = ("10.0.0.4", 8123)
+            ws_id = "WS_001"
+
+            def __repr__(self) -> str:
+                return "<MonitorConnection 10.0.0.4:8123 ws_id=WS_001>"
+
+            def send(self, _message):
+                raise OSError("peer reset")
+
+        with self.assertLogs("WM_Central.socket_server", level="WARNING") as captured:
+            sent = CentralSocketServer._send(FailedConnection(), {"type": "ACK"})
+        self.assertFalse(sent)
+        self.assertIn("Monitor <MonitorConnection 10.0.0.4:8123 ws_id=WS_001>", "\n".join(captured.output))
 
 
 class ManyStationsTests(SocketServerTestCase):

@@ -101,14 +101,14 @@ class EngineTests(unittest.TestCase):
     def test_sequence_numbers_are_handled_correctly(self) -> None:
         engine = WateringStationEngine(engine_config())
         response = engine.handle_monitor_message({"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 99})
-        self.assertEqual(response["sequence"], 99)  # type: ignore[index]
+        self.assertEqual(response["sequence"], 99)
 
     def test_ko_simulation_causes_health_ko(self) -> None:
         engine = WateringStationEngine(engine_config())
         engine.simulate_failure()
         response = engine.handle_monitor_message({"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 5})
-        self.assertEqual(response["type"], "HEALTH_KO")  # type: ignore[index]
-        self.assertEqual(response["reason"], "simulated_failure")  # type: ignore[index]
+        self.assertEqual(response["type"], "HEALTH_KO")
+        self.assertEqual(response["reason"], "simulated_failure")
 
     def test_failure_closes_valve_and_stops_active_irrigation(self) -> None:
         valve = SolenoidValve()
@@ -119,7 +119,7 @@ class EngineTests(unittest.TestCase):
         engine.simulate_failure()
         self.assertFalse(valve.is_open)
         self.assertTrue(controller.wait_until_finished(timeout=2))
-        self.assertEqual(controller.last_result.stopped_by, "manual")  # type: ignore[union-attr]
+        self.assertEqual(controller.last_result.stopped_by, "manual")
         self.assertFalse(engine.request_irrigation("operator-1", duration_seconds=1.0))
 
     def test_close_closes_valve_and_stops_active_irrigation(self) -> None:
@@ -133,7 +133,7 @@ class EngineTests(unittest.TestCase):
 
         self.assertFalse(valve.is_open)
         self.assertTrue(controller.wait_until_finished(timeout=2))
-        self.assertEqual(controller.last_result.stopped_by, "manual")  # type: ignore[union-attr]
+        self.assertEqual(controller.last_result.stopped_by, "manual")
 
     def test_health_checks_work_while_irrigation_is_running(self) -> None:
         valve = SolenoidValve()
@@ -143,7 +143,7 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(engine.request_irrigation("operator-1", duration_seconds=0.2))
         try:
             response = engine.handle_monitor_message({"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 6})
-            self.assertEqual(response["type"], "HEALTH_OK")  # type: ignore[index]
+            self.assertEqual(response["type"], "HEALTH_OK")
         finally:
             engine.stop_irrigation()
             controller.wait_until_finished(timeout=2)
@@ -161,7 +161,7 @@ class EngineTests(unittest.TestCase):
         engine.monitor_socket = engine_sock
         self.assertTrue(engine.request_irrigation("operator-1", duration_seconds=30.0))
         self.assertTrue(valve.is_open)
-        time.sleep(0.07)  # establish a non-zero final reading before the fault
+        time.sleep(0.07)
 
         monitor_sock.close()
         engine.handle_monitor_messages()
@@ -288,7 +288,7 @@ class IrrigationTests(unittest.TestCase):
         self.assertTrue(controller.wait_until_finished(timeout=2))
         self.assertEqual(controller.state, IrrigationState.IDLE)
         self.assertFalse(valve.is_open)
-        self.assertEqual(controller.last_result.stopped_by, "duration")  # type: ignore[union-attr]
+        self.assertEqual(controller.last_result.stopped_by, "duration")
 
     def test_manual_stop_closes_valve(self) -> None:
         valve = SolenoidValve()
@@ -297,7 +297,7 @@ class IrrigationTests(unittest.TestCase):
         self.assertTrue(controller.stop())
         self.assertTrue(controller.wait_until_finished(timeout=2))
         self.assertFalse(valve.is_open)
-        self.assertEqual(controller.last_result.stopped_by, "manual")  # type: ignore[union-attr]
+        self.assertEqual(controller.last_result.stopped_by, "manual")
 
     def test_final_volume_and_duration_are_preserved(self) -> None:
         controller = IrrigationController("WS_001", SolenoidValve(), FlowMeter(60.0), telemetry_interval=0.01)

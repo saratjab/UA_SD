@@ -57,8 +57,8 @@ class MonitorTests(unittest.TestCase):
                 health_interval=0.01,
                 health_timeout=0.05,
             ),
-            central_client=self.central,  # type: ignore[arg-type]
-            engine_server=object(),  # type: ignore[arg-type]
+            central_client=self.central,
+            engine_server=object(),
         )
 
     def test_health_ok(self) -> None:
@@ -95,9 +95,29 @@ class MonitorTests(unittest.TestCase):
         try:
             response = self._answer_one_health_check_in_thread(engine_sock, "HEALTH_OK")
             self.assertTrue(self.monitor.perform_health_check(monitor_sock, 1))
-            response["thread"].join(timeout=2)  # type: ignore[union-attr]
+            response["thread"].join(timeout=2)
             self.assertEqual(len(self.central.resolutions), 1)
             self.assertFalse(self.monitor._fault_active)
+        finally:
+            monitor_sock.close()
+            engine_sock.close()
+
+    def test_health_ok_syncs_fault_state_after_monitor_restart(self) -> None:
+        self.assertFalse(self.monitor._fault_active)
+        self.assertTrue(self.monitor._fault_sync_needed)
+
+        monitor_sock, engine_sock = socket.socketpair()
+        try:
+            response = self._answer_one_health_check_in_thread(
+                engine_sock, "HEALTH_OK"
+            )
+
+            self.assertTrue(self.monitor.perform_health_check(monitor_sock, 1))
+            response["thread"].join(timeout=2)
+
+            self.assertEqual(len(self.central.resolutions), 1)
+            self.assertFalse(self.monitor._fault_active)
+            self.assertFalse(self.monitor._fault_sync_needed)
         finally:
             monitor_sock.close()
             engine_sock.close()
@@ -173,7 +193,6 @@ class MonitorTests(unittest.TestCase):
         self.assertTrue(self.monitor._ensure_central_registration())
         self.assertEqual(self.central.register_calls, 1)
 
-        # Simulate Central closing the persistent session.
         self.central.connected = False
         self.assertTrue(self.monitor._ensure_central_registration())
 

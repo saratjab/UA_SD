@@ -13,11 +13,11 @@ from enum import Enum
 class StationStatus(str, Enum):
     """The five states required by the PDF. DERIVED - never stored."""
 
-    AVAILABLE = "AVAILABLE"            # green
-    WATERING = "WATERING"              # green, blinking
-    LEAK = "LEAK"                      # red
-    OUT_OF_SERVICE = "OUT_OF_SERVICE"  # orange
-    DISCONNECTED = "DISCONNECTED"      # gray
+    AVAILABLE = "AVAILABLE"
+    WATERING = "WATERING"
+    LEAK = "LEAK"
+    OUT_OF_SERVICE = "OUT_OF_SERVICE"
+    DISCONNECTED = "DISCONNECTED"
 
 
 class AdminState(str, Enum):
@@ -46,17 +46,15 @@ class DenyReason(str, Enum):
 
 
 class EndReason(str, Enum):
-    # Reported by the Engine
     DURATION = "DURATION"
+    TARGET_VOLUME = "TARGET_VOLUME"
     MANUAL = "MANUAL"
     LEAK = "LEAK"
     BLOCKED = "BLOCKED"
-    # Inferred by CENTRAL (no final event can arrive)
     DISCONNECTED = "DISCONNECTED"
     CENTRAL_RESTART = "CENTRAL_RESTART"
 
 
-# Irrigation statuses that mean "this station is occupied".
 LIVE_IRRIGATION_STATUSES = (IrrigationStatus.AUTHORIZED, IrrigationStatus.WATERING)
 
 
@@ -101,6 +99,7 @@ class IrrigationRecord:
     duration_s: float | None
     total_volume_l: float | None
     end_reason: EndReason | None
+    requested_volume_l: float | None = None
 
 
 @dataclass(frozen=True)
@@ -108,7 +107,7 @@ class RegistrationResult:
     ok: bool
     reason: str | None
     station: Station | None
-    enrolled: bool  # True = brand-new station, False = known station re-authenticated
+    enrolled: bool
 
 
 @dataclass(frozen=True)
@@ -119,7 +118,7 @@ class StationView:
     location: str
     status: StationStatus
     admin_state: AdminState
-    operator_id: str | None  # only while WATERING
-    fault: str | None        # description of the open fault, if any
+    operator_id: str | None
+    fault: str | None
     flow_rate_lpm: float | None = None
     accumulated_volume_liters: float | None = None

@@ -1,0 +1,19 @@
+services:
+  fo:
+    entrypoint: ["python"]
+    command:
+      - -m
+      - WM_FO.main
+      - --kafka-host
+      - "${KAFKA_HOST:?Set KAFKA_HOST in .env.railway}"
+      - --kafka-port
+      - "${KAFKA_PORT:?Set KAFKA_PORT in .env.railway}"
+      - --operator-id
+      - "${FO_OPERATOR_ID:?Pass an operator ID to scripts/run-fo.sh}"
+    environment:
+      KAFKA_SSL_CA_LOCATION: /run/secrets/kafka/ca.pem
+
+networks:
+  watermanagement:
+    external: true
+    name: watermanagement-local

@@ -27,7 +27,7 @@ class DatabaseTestCase(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.db = Database(Path(tmp.name) / "test.db", clock=FakeClock())
-        self.addCleanup(self.db.close)  # runs BEFORE tmp.cleanup (LIFO) - needed on Windows
+        self.addCleanup(self.db.close)
         self.db.initialize()
         self.db.add_operator("OP_001", "One")
         self.db.add_operator("OP_002", "Two")
