@@ -69,8 +69,6 @@ This layout keeps WM_Central, its SQLite database, and Kafka in Railway and runs
    ```bash
    git clone https://github.com/saratjab/UA_SD.git
    cd UA_SD
-   git checkout fix/transaction
-   git pull --ff-only origin fix/transaction
    ```
 
 2. Place the deployment-provided `.env.railway` in the repository root and the Kafka CA certificate at `secrets/railway-kafka-ca.pem`. Set `KAFKA_CA_CERT_PATH` in `.env.railway` to the certificate's actual absolute path on that PC. The env file must contain the Railway Central host/port, Kafka host/port, Kafka SASL credentials, and CA path used by the Compose files.
