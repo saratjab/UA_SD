@@ -30,6 +30,9 @@ class WateringStationEngine:
         )
         self.failed = False
         self.blocked = False
+        # False while the Monitor reports it has lost WM_Central: the station
+        # cannot be supervised, so it must not water.
+        self.central_reachable = True
         self.monitor_socket: socket.socket | None = None
         self._monitor_ready = threading.Event()
         self._stop_event = threading.Event()
@@ -76,6 +79,7 @@ class WateringStationEngine:
                 return False
             self.config = EngineConfig(**{**self.config.__dict__, "ws_id": assigned_ws_id})
             self.irrigation.ws_id = assigned_ws_id
+            self.central_reachable = True
             self._monitor_ready.set()
             LOGGER.info("HELLO_ACK received")
             return True
@@ -138,6 +142,7 @@ class WateringStationEngine:
             return protocol.nack_message("invalid_sequence")
 
         LOGGER.info("HEALTH_CHECK received")
+        self._apply_central_link(message.get("central_connected", True) is not False)
         if self.failed:
             LOGGER.info("HEALTH_KO sent")
             return {
@@ -156,6 +161,18 @@ class WateringStationEngine:
             "status": "OK",
         }
 
+    def _apply_central_link(self, connected: bool) -> None:
+        if connected:
+            if not self.central_reachable:
+                LOGGER.info("WM_WS_M reports WM_Central reachable again")
+            self.central_reachable = True
+            return
+        if self.central_reachable:
+            LOGGER.warning("WM_WS_M lost WM_Central; stopping any irrigation")
+        self.central_reachable = False
+        if self.irrigation.state is IrrigationState.WATERING:
+            self.irrigation.emergency_stop(reason="monitor_disconnected")
+
     def simulate_failure(self) -> None:
         self.failed = True
         self.irrigation.emergency_stop()
@@ -167,8 +184,8 @@ class WateringStationEngine:
 
     def request_irrigation(self, operator_id: str, duration_seconds: float | None = None,
                            target_volume_liters: float | None = None) -> bool:
-        if not self._monitor_ready.is_set():
-            LOGGER.warning("Irrigation rejected while WM_WS_M is unavailable")
+        if not self._monitor_ready.is_set() or not self.central_reachable:
+            LOGGER.warning("Irrigation rejected while WM_WS_M or WM_Central is unavailable")
             return False
         if self.failed or self.blocked:
             LOGGER.warning("Irrigation rejected while Engine is failed")

@@ -31,7 +31,7 @@ class MessageFactoryTests(unittest.TestCase):
     def test_health_check_message(self) -> None:
         self.assertEqual(
             protocol.health_check_message("WS_001", 7),
-            {"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 7},
+            {"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 7, "central_connected": True},
         )
 
     def test_fault_message(self) -> None:

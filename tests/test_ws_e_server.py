@@ -42,6 +42,21 @@ class EngineServerTests(unittest.TestCase):
             client.close()
             server_sock.close()
 
+    def test_accept_runs_idle_callback_while_no_engine_connects(self) -> None:
+        server = EngineServer("127.0.0.1", 0, "WS_001", hello_timeout=0.1, accept_timeout=0.01)
+        server.start()
+        calls = []
+
+        def idle() -> None:
+            calls.append(1)
+            if len(calls) == 2:
+                server.close()
+
+        server.on_idle = idle
+        with self.assertRaises(OSError):
+            server.accept_engine()
+        self.assertEqual(len(calls), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

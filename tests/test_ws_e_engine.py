@@ -103,6 +103,24 @@ class EngineTests(unittest.TestCase):
         response = engine.handle_monitor_message({"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 99})
         self.assertEqual(response["sequence"], 99)
 
+    def test_lost_central_link_stops_watering_and_blocks_new_starts(self) -> None:
+        controller = IrrigationController("WS_001", SolenoidValve(), FlowMeter(60.0), telemetry_interval=0.01)
+        engine = WateringStationEngine(engine_config(), controller)
+        engine._monitor_ready.set()
+        self.assertTrue(engine.request_irrigation("operator-1", 5.0))
+        response = engine.handle_monitor_message(
+            {"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 1, "central_connected": False})
+        self.assertEqual(response["type"], "HEALTH_OK")
+        self.assertTrue(controller.wait_until_finished(timeout=2))
+        self.assertFalse(controller.valve.is_open)
+        self.assertEqual(controller.last_result.stopped_by, "monitor_disconnected")
+        self.assertFalse(engine.request_irrigation("operator-1", 1.0))
+
+        engine.handle_monitor_message(
+            {"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 2, "central_connected": True})
+        self.assertTrue(engine.request_irrigation("operator-1", 0.01))
+        self.assertTrue(controller.wait_until_finished(timeout=2))
+
     def test_ko_simulation_causes_health_ko(self) -> None:
         engine = WateringStationEngine(engine_config())
         engine.simulate_failure()
