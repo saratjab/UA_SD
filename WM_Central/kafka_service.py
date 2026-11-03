@@ -195,23 +195,27 @@ class CentralKafkaService:
                 self.db.add_outgoing(*row)
             self.flush_outbox()
             return
-        reason = None
-        if not operator.active:
-            reason = DenyReason.OPERATOR_INACTIVE
-        else:
-            status = self.state.status_of(ws_id)
-            reason = {StationStatus.DISCONNECTED: DenyReason.WS_DISCONNECTED,
-                      StationStatus.LEAK: DenyReason.WS_LEAK,
-                      StationStatus.OUT_OF_SERVICE: DenyReason.WS_OUT_OF_SERVICE,
-                      StationStatus.WATERING: DenyReason.WS_BUSY}.get(status)
-        outgoing = []
-        if reason is None:
-            outgoing.extend([
-                self._outgoing(WS_COMMANDS, "START_IRRIGATION", mode_payload, f"start:{request_id}", ws_id=ws_id, operator_id=operator_id, request_id=request_id),
-                self._outgoing(OPERATOR_EVENTS, "ACTIVATION_AUTHORIZED", mode_payload, f"authorized:{request_id}", operator_id=operator_id, ws_id=ws_id, request_id=request_id, key=operator_id),
-            ])
-        denied_outgoing = [self._outgoing(OPERATOR_EVENTS, "ACTIVATION_DENIED", {"reason": (reason or DenyReason.WS_BUSY).value}, f"denied:{request_id}", operator_id=operator_id, ws_id=ws_id, request_id=request_id, key=operator_id)]
-        record = self.db.record_irrigation_request(request_id, ws_id, operator_id, int(duration) if has_duration else None, reason, outgoing, denied_outgoing, float(target_volume) if has_target else None)
+        # The status check and the insert must be one atomic step: otherwise a
+        # BLOCK/fault/disconnect in between authorizes a station that is no
+        # longer available. StateManager's lock serializes all of those.
+        with self.state.exclusive():
+            reason = None
+            if not operator.active:
+                reason = DenyReason.OPERATOR_INACTIVE
+            else:
+                status = self.state.status_of(ws_id)
+                reason = {StationStatus.DISCONNECTED: DenyReason.WS_DISCONNECTED,
+                          StationStatus.LEAK: DenyReason.WS_LEAK,
+                          StationStatus.OUT_OF_SERVICE: DenyReason.WS_OUT_OF_SERVICE,
+                          StationStatus.WATERING: DenyReason.WS_BUSY}.get(status)
+            outgoing = []
+            if reason is None:
+                outgoing.extend([
+                    self._outgoing(WS_COMMANDS, "START_IRRIGATION", mode_payload, f"start:{request_id}", ws_id=ws_id, operator_id=operator_id, request_id=request_id),
+                    self._outgoing(OPERATOR_EVENTS, "ACTIVATION_AUTHORIZED", mode_payload, f"authorized:{request_id}", operator_id=operator_id, ws_id=ws_id, request_id=request_id, key=operator_id),
+                ])
+            denied_outgoing = [self._outgoing(OPERATOR_EVENTS, "ACTIVATION_DENIED", {"reason": (reason or DenyReason.WS_BUSY).value}, f"denied:{request_id}", operator_id=operator_id, ws_id=ws_id, request_id=request_id, key=operator_id)]
+            record = self.db.record_irrigation_request(request_id, ws_id, operator_id, int(duration) if has_duration else None, reason, outgoing, denied_outgoing, float(target_volume) if has_target else None)
         if record.status is IrrigationStatus.DENIED:
             self.flush_outbox()
             return

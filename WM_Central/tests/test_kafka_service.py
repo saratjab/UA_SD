@@ -365,6 +365,24 @@ class CentralKafkaTests(DatabaseTestCase):
         self.assertEqual([m["payload"]["sequence"] for m in progress], [3])
         self.assertEqual(self.state.snapshot()[0].accumulated_volume_liters, 0.3)
 
+    def test_block_during_authorization_cannot_leave_a_blocked_station_authorized(self) -> None:
+        import threading
+        from unittest import mock
+        original = self.state.status_of
+        blocker = threading.Thread(target=self.service.issue_station_command, args=("BLOCK_WS", "WS_001"))
+
+        def status_then_race(ws_id: str):
+            status = original(ws_id)
+            blocker.start()
+            blocker.join(0.2)
+            return status
+
+        with mock.patch.object(self.state, "status_of", side_effect=status_then_race):
+            self.service.handle_activation(self.request())
+        blocker.join(2)
+        self.assertIsNone(self.db.get_live_irrigation("WS_001"))
+        self.assertEqual(self.state.status_of("WS_001").value, "OUT_OF_SERVICE")
+
     def test_monitor_unavailable_rejection_is_valid_and_persisted(self) -> None:
         self.service.handle_activation(self.request())
         self.service.handle_engine_event(envelope(

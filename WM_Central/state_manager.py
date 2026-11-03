@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 
 from .database import Database
 from .models import (
@@ -103,15 +104,27 @@ class StateManager:
         with self._lock:
             self._termination_outgoing = factory
 
+    @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Hold the state lock across a check-then-act sequence (e.g. authorize)."""
+        with self._lock:
+            yield
+
     def register(self, ws_id: str, location: str | None, connection: Any) -> RegisterOutcome:
         ws_id = ws_id.strip()
         with self._lock:
+            previous = self._connections.get(ws_id)
+            if previous is not None and previous is not connection:
+                # Without station credentials a newcomer cannot prove it is the
+                # real station, so the live session wins. A dead peer frees the
+                # ID once TCP keepalive closes its socket (about 25 s).
+                LOGGER.warning("WS %s is already connected; rejecting a second registration", ws_id)
+                return RegisterOutcome(False, "already_connected")
             result = self._db.register_station(ws_id, location)
             if not result.ok:
                 return RegisterOutcome(False, result.reason)
-            previous = self._connections.get(ws_id)
             self._connections[ws_id] = connection
-            replaced = previous if previous is not connection else None
+            replaced = None
         LOGGER.info(
             "WS %s %s (%s)",
             ws_id,
