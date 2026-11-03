@@ -179,9 +179,7 @@ class KafkaTopicInitTests(unittest.TestCase):
         self.assertIn("KAFKA_PUBLIC_HOST", template)
         self.assertIn("KAFKA_TLS_KEYSTORE_B64", template)
         self.assertIn("KAFKA_PUBLIC_LISTENER_ENABLED=true", template)
-        self.assertIn("KAFKA_REQUIRE_SECURITY=true", (ROOT / "docs" / "railway-deployment.md").read_text())
-        self.assertIn("CA:TRUE", (ROOT / "docs" / "railway-deployment.md").read_text())
-        self.assertIn("exact", (ROOT / "docs" / "railway-deployment.md").read_text())
+        self.assertIn("KAFKA_REQUIRE_SECURITY=true", (ROOT / ".env.railway.example").read_text(encoding="utf-8"))
 
     def test_secure_topic_initializer_guard_rejects_missing_or_insecure_protocol(self) -> None:
         for env in (
@@ -343,13 +341,15 @@ class KafkaTopicInitTests(unittest.TestCase):
         self.assertNotIn("--reset-offsets", script)
 
     def test_railway_instructions_use_allocated_endpoint_placeholders(self) -> None:
-        for filename in ("docs/railway-deployment.md", "docs/local-docker-deployment.md"):
+        import re
+        for filename in ("README.md", ".env.railway.example"):
             content = (ROOT / filename).read_text(encoding="utf-8")
             with self.subTest(document=filename):
-                self.assertNotIn("yamanote.proxy.rlwy.net", content)
-                self.assertNotIn("iriguchi.proxy.rlwy.net", content)
+                self.assertIsNone(re.search(r"[a-z0-9-]+\.proxy\.rlwy\.net", content))
+                self.assertIsNone(re.search(r"[a-z0-9-]+\.up\.railway\.app", content))
                 self.assertIn("<KAFKA_TCP_PROXY_HOST>", content)
-                self.assertIn("<CENTRAL_TCP_PROXY_HOST>", content)
+        template = (ROOT / ".env.railway.example").read_text(encoding="utf-8")
+        self.assertIn("<CENTRAL_TCP_PROXY_HOST>", template)
 
     def test_local_compose_publishes_admin_api_only_on_loopback_and_has_no_default_secret(self) -> None:
         content = (ROOT / "docker-compose.local.yml").read_text(encoding="utf-8")

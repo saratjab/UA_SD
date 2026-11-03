@@ -18,6 +18,9 @@ from .request_file import load_requests
 
 LOGGER = logging.getLogger("wm_fo")
 FILE_REQUEST_DELAY_SECONDS = 4.0
+# Extra wait beyond a request's own duration: covers authorization, the Engine
+# start and Central's START timeout before a terminal event must have arrived.
+FILE_REQUEST_GRACE_SECONDS = 120.0
 POLL_SHUTDOWN_TIMEOUT_SECONDS = 3.0
 
 
@@ -70,13 +73,20 @@ def _submit_and_wait(operator: FieldOperator, ws_id: str, duration: int | None,
 
 
 def _file_mode(operator: FieldOperator, path: str, timeout: float) -> None:
+    """Send each request, wait for its outcome, pause 4 s, then send the next.
+
+    The spec moves on once a request concludes "whether successfully or not",
+    so one request whose outcome never arrives must not block the whole file.
+    """
     requests = load_requests(path)
     for index, request in enumerate(requests):
         LOGGER.info("Processing file request %d of %d", index + 1, len(requests))
         duration = request.get("duration_seconds")
         target = request.get("target_volume_liters")
-        if not _submit_and_wait(operator, request["ws_id"], duration, None, target):
-            raise RuntimeError(f"request {request.get('ws_id')} lost its terminal-result waiter; stopping file sequence")
+        wait = max(timeout, duration + FILE_REQUEST_GRACE_SECONDS) if duration else timeout
+        if not _submit_and_wait(operator, request["ws_id"], duration, wait, target):
+            LOGGER.warning("No final result for the request on %s within %.0f s; moving on",
+                           request["ws_id"], wait)
         if index + 1 < len(requests):
             time.sleep(FILE_REQUEST_DELAY_SECONDS)
 

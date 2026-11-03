@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from .database import CENTRAL_OPERATOR_ID
 from .models import IrrigationStatus, StationStatus
 
 
@@ -277,7 +278,7 @@ def _execute_command(owner: CentralAdminServer, body: dict[str, Any], idempotenc
             raise ValueError("operator_id must be a string")
         operators = owner._service.db.list_operators()
         if operator_id is None:
-            operator_id = next((operator.operator_id for operator in operators if operator.active), None)
+            operator_id = CENTRAL_OPERATOR_ID
         if not operator_id or not any(operator.operator_id == operator_id and operator.active for operator in operators):
             raise AdminConflict("no active operator matches operator_id")
         if all_stations:

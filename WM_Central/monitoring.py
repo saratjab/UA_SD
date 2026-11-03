@@ -11,6 +11,7 @@ import sys
 import threading
 from collections.abc import Callable
 
+from .database import CENTRAL_OPERATOR_ID
 from .models import StationStatus, StationView
 from .state_manager import StateManager
 
@@ -99,11 +100,7 @@ def execute_control_line(line: str, state: StateManager, service: object, logger
         except ValueError:
             logger.warning("Duration must be a positive whole number of seconds")
             return True
-        operators = state.operators()
-        operator_id = args[3] if len(args) == 4 else next((op.operator_id for op in operators if op.active), None)
-        if operator_id is None:
-            logger.warning("No active operator is registered; pass an operator_id or register one first")
-            return True
+        operator_id = args[3] if len(args) == 4 else CENTRAL_OPERATOR_ID
         for ws_id in targets:
             request_id = service.start_irrigation(ws_id, duration, operator_id)
             record = state.irrigation(request_id)
@@ -220,11 +217,7 @@ def execute_menu_choice(
         except ValueError:
             logger.error("Duration must be a positive whole number of seconds")
             return True
-        operators = state.operators()
-        operator_id = next((op.operator_id for op in operators if op.active), None)
-        if operator_id is None:
-            logger.error("No active operator is registered; irrigation was not started")
-            return True
+        operator_id = CENTRAL_OPERATOR_ID
         for target in targets:
             request_id = service.start_irrigation(target, duration, operator_id)
             record = state.irrigation(request_id)

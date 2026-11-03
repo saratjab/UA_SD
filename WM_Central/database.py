@@ -1,6 +1,6 @@
 """SQLite access layer for WM_Central.
 
-Design rules (see docs/adr/ADR-001-state-model-and-schema.md):
+Design rules:
 
 * ONE sqlite3 connection shared by all threads, every operation guarded by a
   re-entrant lock. Central's database traffic is tiny (a few writes per
@@ -49,6 +49,7 @@ SCHEMA_PATH = DB_DIR / "schema.sql"
 SEED_DEV_PATH = DB_DIR / "seed_dev.sql"
 
 MAX_WS_ID_LENGTH = 64
+CENTRAL_OPERATOR_ID = "CENTRAL"
 
 _LIVE_SQL = "('AUTHORIZED', 'WATERING')"
 
@@ -123,6 +124,12 @@ class Database:
             self._migrate_requested_volume(conn)
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
             self._migrate_outbox_keys(conn)
+            # Irrigations started from CENTRAL's own controls are attributed to
+            # this operator instead of borrowing a real field operator's ID.
+            conn.execute(
+                "INSERT OR IGNORE INTO operators (operator_id, name, active) VALUES (?, ?, 1)",
+                (CENTRAL_OPERATOR_ID, "WM_Central"),
+            )
 
     @staticmethod
     def _migrate_requested_volume(conn: sqlite3.Connection) -> None:

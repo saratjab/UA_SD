@@ -93,8 +93,8 @@ docker compose \
   -f docker-compose.railway.yml \
   run --rm --no-deps -it \
   --entrypoint python fo -m WM_FO.WM_FO \
-  --kafka-host ballast.proxy.rlwy.net \
-  --kafka-port 37080 \
+  --kafka-host <KAFKA_TCP_PROXY_HOST> \
+  --kafka-port <KAFKA_TCP_PROXY_PORT> \
   --operator-id OP_003
 ```
 
@@ -141,7 +141,7 @@ Open the Engine menu with `docker attach wm-ws-ws-004-engine-1`. Detach with `Ct
 The Central admin menu is a local client and does not start another Central server:
 
 ```bash
-python3 -m WM_Central.admin_client --url https://central-production-447a.up.railway.app
+python3 -m WM_Central.admin_client --url https://<CENTRAL_ADMIN_HOST>
 ```
 
 It prompts for the admin token. The menu can display station status, start/stop irrigation, and block or activate stations. Keep the token private.

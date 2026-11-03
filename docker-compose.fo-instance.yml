@@ -3,7 +3,7 @@ services:
     entrypoint: ["python"]
     command:
       - -m
-      - WM_FO.main
+      - WM_FO.WM_FO
       - --kafka-host
       - "${KAFKA_HOST:?Set KAFKA_HOST in .env.railway}"
       - --kafka-port
