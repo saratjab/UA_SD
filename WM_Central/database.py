@@ -465,9 +465,18 @@ class Database:
             )
         return cursor.rowcount == 1
 
-    def end_live_irrigation(self, ws_id: str, end_reason: EndReason) -> IrrigationRecord | None:
+    def end_live_irrigation(
+        self,
+        ws_id: str,
+        end_reason: EndReason,
+        outgoing_factory: Callable[[IrrigationRecord], list[tuple[str, str, str | None, dict[str, Any]]]] | None = None,
+    ) -> IrrigationRecord | None:
         """Close whatever is live on a station (used when CENTRAL itself infers
-        the end: disconnect, leak, block). Returns the closed record, if any."""
+        the end: disconnect, leak, block). Returns the closed record, if any.
+
+        ``outgoing_factory`` builds the messages that announce the end (STOP to
+        the Engine, final summary to the operator); they are stored in the same
+        transaction, so the state change and its notifications cannot diverge."""
         now = self._clock()
         with self.transaction() as conn:
             row = conn.execute(
@@ -480,10 +489,12 @@ class Database:
                 "WHERE irrigation_id = ?",
                 (end_reason.value, now, row["irrigation_id"]),
             )
-            ended = conn.execute(
+            ended = _irrigation(conn.execute(
                 "SELECT * FROM irrigations WHERE irrigation_id = ?", (row["irrigation_id"],)
-            ).fetchone()
-        return _irrigation(ended)
+            ).fetchone())
+            if outgoing_factory is not None:
+                self._insert_outgoing(conn, outgoing_factory(ended))
+        return ended
 
     def get_irrigation(self, request_id: str) -> IrrigationRecord | None:
         row = self._one("SELECT * FROM irrigations WHERE request_id = ?", (request_id,))

@@ -254,6 +254,65 @@ class CentralKafkaTests(DatabaseTestCase):
         self.assertEqual(record.status, IrrigationStatus.DENIED)
         self.assertEqual(record.deny_reason.value, "ENGINE_FAILED")
 
+    def start_watering(self) -> None:
+        self.service.handle_activation(self.request())
+        self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {}, ws_id="WS_001", request_id="request-1"))
+        self.service.handle_engine_event(envelope(
+            "IRRIGATION_TELEMETRY", {"sequence": 1, "flow_rate_lpm": 6.0, "accumulated_volume_liters": 0.1, "duration_seconds": 1.0},
+            ws_id="WS_001", request_id="request-1",
+        ))
+
+    def central_termination_messages(self) -> tuple[list[dict], list[dict]]:
+        self.service.flush_outbox()
+        stops = [m for topic, m in self.publisher.records
+                 if topic == "wm.ws.commands" and m["event_type"] == "STOP_IRRIGATION"]
+        completions = [m for topic, m in self.publisher.records
+                       if topic == "wm.operator.events" and m["event_type"] == "IRRIGATION_COMPLETED"]
+        return stops, completions
+
+    def test_monitor_disconnect_stops_engine_and_notifies_operator(self) -> None:
+        self.start_watering()
+        self.state.disconnect("WS_001", self.connection)
+        stops, completions = self.central_termination_messages()
+        self.assertEqual([m["request_id"] for m in stops], ["request-1"])
+        self.assertEqual(len(completions), 1)
+        self.assertEqual(completions[0]["operator_id"], "OP_001")
+        self.assertEqual(completions[0]["payload"]["end_reason"], "MONITOR_DISCONNECTED")
+        self.assertEqual(completions[0]["payload"]["measured_by"], "CENTRAL")
+        self.assertEqual(completions[0]["payload"]["accumulated_volume_liters"], 0.1)
+
+    def test_leak_stops_engine_and_notifies_operator(self) -> None:
+        self.start_watering()
+        self.state.report_fault("WS_001", self.connection, "health_ko")
+        stops, completions = self.central_termination_messages()
+        self.assertEqual(len(stops), 1)
+        self.assertEqual(completions[0]["payload"]["end_reason"], "LEAK_DETECTED")
+        record = self.db.get_irrigation("request-1")
+        self.assertIsNone(record.total_volume_l)
+
+    def test_block_notifies_operator_without_extra_stop_command(self) -> None:
+        self.start_watering()
+        self.assertTrue(self.service.issue_station_command("BLOCK_WS", "WS_001"))
+        stops, completions = self.central_termination_messages()
+        self.assertEqual(stops, [])
+        self.assertEqual(completions[0]["payload"]["end_reason"], "STATION_BLOCKED")
+        commands = [m["event_type"] for topic, m in self.publisher.records if topic == "wm.ws.commands"]
+        self.assertEqual(commands[-1], "BLOCK_WS")
+
+    def test_late_engine_completion_after_central_termination_is_not_sent_twice(self) -> None:
+        self.start_watering()
+        self.state.disconnect("WS_001", self.connection)
+        self.service.handle_engine_event(envelope(
+            "IRRIGATION_COMPLETED",
+            {"end_reason": "CENTRAL_STOP", "duration_seconds": 1.4, "accumulated_volume_liters": 0.14},
+            ws_id="WS_001", request_id="request-1",
+        ))
+        _stops, completions = self.central_termination_messages()
+        self.assertEqual(len(completions), 1)
+        record = self.db.get_irrigation("request-1")
+        self.assertEqual(record.end_reason.value, "DISCONNECTED")
+        self.assertEqual((record.duration_s, record.total_volume_l), (1.4, 0.14))
+
     def test_monitor_unavailable_rejection_is_valid_and_persisted(self) -> None:
         self.service.handle_activation(self.request())
         self.service.handle_engine_event(envelope(

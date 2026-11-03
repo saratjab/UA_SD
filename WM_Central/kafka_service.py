@@ -14,7 +14,7 @@ from common.kafka_contract import (ACTIVATION_REQUESTS, COMMAND_REJECTION_REASON
 from common.kafka_transport import KafkaPublisher, KafkaWorker
 
 from .database import Database
-from .models import DenyReason, EndReason, IrrigationStatus, StationStatus
+from .models import DenyReason, EndReason, IrrigationRecord, IrrigationStatus, StationStatus
 from .state_manager import StateManager
 
 LOGGER = logging.getLogger(__name__)
@@ -39,7 +39,42 @@ class CentralKafkaService:
         self.db, self.state, self.publisher = db, state, publisher
         self.latest_telemetry: dict[str, LatestTelemetry] = {}
         self._outbox_flush_lock = threading.Lock()
+        state.set_termination_outgoing(self._central_termination_outgoing)
         self.flush_outbox()
+
+    # EndReason recorded by CENTRAL -> end_reason vocabulary the FO already shows.
+    _CENTRAL_END_REASONS = {
+        EndReason.LEAK: "LEAK_DETECTED",
+        EndReason.BLOCKED: "STATION_BLOCKED",
+        EndReason.DISCONNECTED: "MONITOR_DISCONNECTED",
+    }
+
+    def _central_termination_outgoing(self, record: IrrigationRecord) -> list[tuple[str, str, str | None, dict[str, Any]]]:
+        """Messages for an irrigation CENTRAL ended itself (leak, block, disconnect).
+
+        The Engine must stop even if its Monitor link is still up; BLOCK_WS
+        already stops it, so only the other reasons need STOP_IRRIGATION. The
+        operator gets the final summary now instead of waiting for an Engine
+        completion that may never come. Its identity equals the Engine-driven
+        completion's, so the operator is notified exactly once.
+        """
+        rows = []
+        if record.end_reason is not EndReason.BLOCKED:
+            rows.append(self._outgoing(WS_COMMANDS, "STOP_IRRIGATION", {}, f"central-stop:{record.request_id}",
+                                       ws_id=record.ws_id, request_id=record.request_id))
+        if record.operator_id:
+            payload: dict[str, Any] = {
+                "end_reason": self._CENTRAL_END_REASONS.get(record.end_reason, record.end_reason.value),
+                "measured_by": "CENTRAL",
+            }
+            latest = self.latest_telemetry.get(record.ws_id)
+            if latest is not None and latest.request_id == record.request_id:
+                payload["duration_seconds"] = latest.duration_seconds
+                payload["accumulated_volume_liters"] = latest.accumulated_volume_liters
+            rows.append(self._outgoing(OPERATOR_EVENTS, "IRRIGATION_COMPLETED", payload, f"completed:{record.request_id}",
+                                       operator_id=record.operator_id, ws_id=record.ws_id,
+                                       request_id=record.request_id, key=record.operator_id))
+        return rows
 
     def flush_outbox(self) -> None:
         with self._outbox_flush_lock:
