@@ -112,6 +112,21 @@ class CentralAdminApiTests(DatabaseTestCase):
         code, _ = self.call("GET", "/v1/stations", forwarded_proto="https")
         self.assertEqual(code, 200)
 
+    def test_live_panel_page_is_public_but_its_events_require_the_token(self) -> None:
+        from common.event_panel import reset_feed
+        feed = reset_feed()
+        feed.record("IN", "WM_FO OP_001", "ACTIVATION_REQUEST", ws_id="WS_001", request_id="r1")
+        with urlopen(self.base_url + "/panel", timeout=3) as response:
+            page = response.read().decode()
+            self.assertIn("text/html", response.headers["Content-Type"])
+        self.assertIn('"requiresToken": true', page)
+        self.assertNotIn("very-secret-test-token", page)
+        self.assertEqual(self.call("GET", "/v1/events", token=None)[0], 401)
+        code, body = self.call("GET", "/v1/events?after=0")
+        self.assertEqual(code, 200)
+        self.assertEqual([e["event"] for e in body["events"]], ["ACTIVATION_REQUEST"])
+        self.assertEqual(self.call("GET", f"/v1/events?after={body['last']}")[1]["events"], [])
+
     def test_station_socket_and_admin_http_listeners_bind_separate_ports(self) -> None:
         socket_server = CentralSocketServer("127.0.0.1", 0, self.state)
         admin_server = CentralAdminServer(

@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import sys
 
+from common.event_panel import start_panel
+
 from .central_client import CentralClient
 from .config import parse_args
 from .monitor import WateringStationMonitor
@@ -19,6 +21,7 @@ def configure_logging() -> None:
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
     config = parse_args(argv)
+    start_panel(config.panel_host, config.panel_port, f"WM_WS_M {config.ws_id}")
 
     central_client = CentralClient(
         host=config.central_host,

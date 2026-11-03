@@ -79,5 +79,23 @@ class MonitorFeedTests(unittest.TestCase):
         self.assertEqual(names(feed), [("LOCAL", "ENGINE_TIMEOUT"), ("LOCAL", "ENGINE_HEALTHY")])
 
 
+class PanelOptionTests(unittest.TestCase):
+    def test_every_station_and_fo_component_accepts_panel_options(self) -> None:
+        from WM_FO.config import parse_args as fo_args
+        from WM_WS.WM_WS_E.config import parse_args as engine_args
+        from WM_WS.WM_WS_M.config import parse_args as monitor_args
+        panel = ["--panel-host", "0.0.0.0", "--panel-port", "7100"]
+        configs = [
+            fo_args(["--kafka-host", "k", "--kafka-port", "9092", "--operator-id", "OP_001", *panel]),
+            engine_args(["--kafka-host", "k", "--kafka-port", "9092", "--monitor-host", "m",
+                         "--monitor-port", "6001", *panel]),
+            monitor_args(["--ws-id", "WS_001", "--central-host", "c", "--central-port", "5000",
+                          "--engine-host", "0.0.0.0", "--engine-port", "6001", *panel]),
+        ]
+        for config in configs:
+            self.assertEqual((config.panel_host, config.panel_port), ("0.0.0.0", 7100))
+        self.assertEqual(fo_args(["--kafka-host", "k", "--kafka-port", "1", "--operator-id", "O"]).panel_port, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

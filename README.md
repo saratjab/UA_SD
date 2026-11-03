@@ -37,12 +37,37 @@ The local compose file seeds development operators (`OP_001`–`OP_003`) into th
 Start an interactive FO in a terminal:
 
 ```bash
-docker compose --profile operator -f docker-compose.local.yml run --rm -it fo
+docker compose --profile operator -f docker-compose.local.yml run --rm -it --service-ports fo
 ```
 
 The default operator is `OP_001`. To use a different seeded operator, prefix the command with `FO_OPERATOR_ID=OP_002` (or `OP_003`). The FO lists available stations; enter a station ID and a positive duration in seconds. Type `q` to exit.
 
 Several FOs can run and send requests at the same time, but **each FO must use its own operator ID**. If two operators request the same station at once, Central authorizes exactly one; the other receives `ACTIVATION_DENIED WS_BUSY`. An operator ID belongs to one FO process at a time: the FO's Kafka consumer group is named after the ID so that a restarted FO can still show the results of requests it sent before the restart, and two processes sharing one ID would split that group and one of them would miss its replies.
+
+### Live event panels
+
+Every component serves a small read-only web page that shows, live, the messages it exchanges with the other components. You can follow one irrigation from the FO that requested it, through Central, to the station and back. Each panel shows only its own component's traffic. Rows are colour-coded like the station states (green for start/progress/completion, red for leak/fault/rejection, orange for block, gray for disconnection), and you can filter by station, request ID or event.
+
+| Component | URL (local stack) |
+|---|---|
+| WM_Central | http://localhost:8001/panel (asks for the admin token; see below) |
+| WS_001 Monitor / Engine | http://localhost:7101 / http://localhost:7102 |
+| WS_002 Monitor / Engine | http://localhost:7103 / http://localhost:7104 |
+| FO | http://localhost:7201 |
+
+All panels are published on `127.0.0.1` only. Central's panel is part of its admin API, which the local stack leaves off and ships without a default secret. Enable it by choosing your own token when starting the stack:
+
+```bash
+CENTRAL_ADMIN_PORT=8001 CENTRAL_ADMIN_TOKEN=<choose-a-token> docker compose -f docker-compose.local.yml up -d --build
+```
+
+To run a second FO next to the first, give it its own operator ID and panel port:
+
+```bash
+FO_OPERATOR_ID=OP_002 FO_PANEL_PORT=7202 docker compose --profile operator -f docker-compose.local.yml run --rm -it --service-ports fo
+```
+
+Outside Docker, enable a panel with `--panel-port <port>` (and `--panel-host`, default `127.0.0.1`) on `WM_FO`, `WM_WS_E` or `WM_WS_M`. Central's panel is part of its admin API: on Railway, open `https://<CENTRAL_ADMIN_HOST>/panel` and enter `CENTRAL_ADMIN_TOKEN`.
 
 The Engine menu can be opened with:
 
@@ -94,11 +119,15 @@ docker compose \
   -f docker-compose.local.yml \
   -f docker-compose.railway.yml \
   run --rm --no-deps -it \
+  -p 127.0.0.1:7201:7100 \
   --entrypoint python fo -m WM_FO.WM_FO \
   --kafka-host <KAFKA_TCP_PROXY_HOST> \
   --kafka-port <KAFKA_TCP_PROXY_PORT> \
-  --operator-id OP_003
+  --operator-id OP_003 \
+  --panel-host 0.0.0.0 --panel-port 7100
 ```
+
+Its live event panel is then at http://localhost:7201 (use another host port for a second FO).
 
 Replace the Kafka host and port with the external bootstrap endpoint from the deployment env file. At the prompt, choose an available station and enter an irrigation duration. Type `q` to stop the FO; Compose removes its one-off container.
 
@@ -118,7 +147,7 @@ docker compose \
   up -d --no-build monitor engine
 ```
 
-The station Compose file starts both the Monitor and Engine. It connects the Monitor to Railway Central over TCP and the Engine to Railway Kafka using SASL_SSL and the mounted CA certificate. The Engine state volume persists across `stop` and `up` operations.
+The station Compose file starts both the Monitor and Engine. It connects the Monitor to Railway Central over TCP and the Engine to Railway Kafka using SASL_SSL and the mounted CA certificate. The Engine state volume persists across `stop` and `up` operations. Their live event panels are at http://localhost:7101 (Monitor) and http://localhost:7102 (Engine); for a second station on the same PC, export distinct `MONITOR_PANEL_PORT` and `ENGINE_PANEL_PORT` values.
 
 Check and follow the instance:
 

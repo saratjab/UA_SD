@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 
+from common.event_panel import start_panel
 from common.kafka_transport import KafkaPublisher, KafkaUnavailable
 
 from .config import parse_args
@@ -150,6 +151,7 @@ def _interactive_mode(operator: FieldOperator, timeout: float) -> None:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = parse_args(argv)
+    panel = start_panel(config.panel_host, config.panel_port, f"WM_FO {config.operator_id}")
     bootstrap = f"{config.kafka_host}:{config.kafka_port}"
     worker = None
     publisher = None
@@ -206,6 +208,8 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             if publisher is not None:
                 publisher.close()
+            if panel is not None:
+                panel.stop()
     return exit_code
 
 

@@ -18,7 +18,10 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
+
+from common.event_panel import events_payload, render_panel
 
 from .database import CENTRAL_OPERATOR_ID
 from .models import IrrigationStatus, StationStatus
@@ -120,7 +123,16 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
             super().setup()
 
         def do_GET(self) -> None:
+            parts = urlsplit(self.path)
+            if parts.path == "/panel":
+                # Static page with no data; it asks for the admin token and
+                # sends it as a bearer header to /v1/events.
+                self._reply_panel()
+                return
             if not self._authorize():
+                return
+            if parts.path == "/v1/events":
+                self._reply(HTTPStatus.OK, events_payload(parse_qs(parts.query).get("after", ["0"])[0]))
                 return
             if self.path != "/v1/stations":
                 self._reply(HTTPStatus.NOT_FOUND, {"error": "not_found"})
@@ -226,6 +238,22 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
                 self.wfile.write(data)
             except OSError:
                 LOGGER.warning("Admin response write failed for client %s", self.client_address[0])
+            self.close_connection = True
+
+        def _reply_panel(self) -> None:
+            if owner._require_forwarded_https and self.headers.get("X-Forwarded-Proto", "").lower() != "https":
+                self._reply(HTTPStatus.FORBIDDEN, {"error": "https_required"})
+                return
+            data = render_panel("WM_Central", "/v1/events", requires_token=True).encode("utf-8")
+            self._last_status = int(HTTPStatus.OK)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(data)
             self.close_connection = True
 
         def log_message(self, _format: str, *_args: Any) -> None:

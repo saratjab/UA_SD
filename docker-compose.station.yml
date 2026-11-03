@@ -25,6 +25,12 @@ services:
       - 0.0.0.0
       - --engine-port
       - "6001"
+      - --panel-host
+      - 0.0.0.0
+      - --panel-port
+      - "7100"
+    ports:
+      - "127.0.0.1:${MONITOR_PANEL_PORT:-7101}:7100"
 
   engine:
     <<: *app-defaults
@@ -48,6 +54,12 @@ services:
       - "/engine-state/.wm_ws_e_${WS_ID:?Set WS_ID}.sqlite3"
       - --local-operator-id
       - "${LOCAL_OPERATOR_ID:?Set LOCAL_OPERATOR_ID}"
+      - --panel-host
+      - 0.0.0.0
+      - --panel-port
+      - "7100"
+    ports:
+      - "127.0.0.1:${ENGINE_PANEL_PORT:-7102}:7100"
     environment:
       KAFKA_REQUIRE_SECURITY: "${KAFKA_REQUIRE_SECURITY:-true}"
       KAFKA_SECURITY_PROTOCOL: "${KAFKA_SECURITY_PROTOCOL:-SASL_SSL}"

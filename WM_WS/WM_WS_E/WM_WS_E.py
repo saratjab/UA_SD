@@ -10,6 +10,7 @@ from .config import parse_args
 from .engine import WateringStationEngine
 from .kafka_service import EngineKafkaService
 from WM_FO.kafka_client import FieldOperator
+from common.event_panel import start_panel
 from common.kafka_transport import KafkaPublisher, KafkaUnavailable
 
 
@@ -142,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         monitor_thread.join(timeout=3.0)
         return 0
     config = engine.config
+    start_panel(config.panel_host, config.panel_port, f"WM_WS_E {config.ws_id}")
 
     try:
         state_path = Path(config.state_path) if config.state_path else Path(
