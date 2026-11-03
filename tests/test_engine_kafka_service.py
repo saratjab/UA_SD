@@ -353,6 +353,62 @@ class EngineKafkaTests(unittest.TestCase):
         self.assertEqual(engine.irrigation.state.value, "IDLE")
         service.close()
 
+    def test_engine_without_cli_ws_id_uses_id_assigned_by_monitor_for_kafka(self) -> None:
+        import socket
+        from common import protocol
+        listener = socket.create_server(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+
+        def monitor() -> None:
+            conn, _ = listener.accept()
+            with conn:
+                protocol.receive_message(conn)
+                protocol.send_message(conn, protocol.hello_ack_message("WS_007"))
+                try:
+                    protocol.receive_message(conn)
+                except (OSError, protocol.ProtocolError):
+                    pass
+
+        thread = threading.Thread(target=monitor, daemon=True)
+        thread.start()
+        config = EngineConfig(None, "localhost", 9092, "127.0.0.1", port, 6, 1, .1, .01)
+        engine = WateringStationEngine(config)
+        runner = threading.Thread(target=engine.run, daemon=True)
+        runner.start()
+        try:
+            self.assertTrue(engine.wait_until_monitor_ready(timeout=2))
+            self.assertEqual(engine.config.ws_id, "WS_007")
+            service = EngineKafkaService(engine, FakePublisher())
+            worker = service.worker("unused", consumer=OneMessageConsumer(b"{}"))
+            self.assertEqual(worker._group_id, "wm-ws-engine-WS_007-v1")
+            service.close()
+        finally:
+            engine.close()
+            listener.close()
+            runner.join(timeout=2)
+
+    def test_kafka_worker_requires_an_assigned_ws_id(self) -> None:
+        config = EngineConfig(None, "localhost", 9092, "localhost", 1, 6, 1, .1, .01)
+        service = EngineKafkaService(WateringStationEngine(config), FakePublisher())
+        with self.assertRaises(ValueError):
+            service.worker("unused", consumer=OneMessageConsumer(b"{}"))
+        service.close()
+
+    def test_outbox_insert_waits_for_the_store_lock(self) -> None:
+        service = EngineKafkaService(self.engine(), FakePublisher())
+        count = lambda: service._store.execute("SELECT COUNT(*) FROM engine_outbox").fetchone()[0]
+        service._retry_stop.set(); service._retry_thread.join(2)
+        publisher_thread = threading.Thread(
+            target=service._publish, args=("IRRIGATION_STARTED", "r1", "OP", {}), daemon=True)
+        with service._lock:
+            publisher_thread.start()
+            publisher_thread.join(0.2)
+            self.assertTrue(publisher_thread.is_alive(), "outbox write must not bypass the store lock")
+            self.assertEqual(count(), 0)
+        publisher_thread.join(2)
+        self.assertFalse(publisher_thread.is_alive())
+        service.close()
+
     def test_outbox_flushes_in_insertion_order_not_message_id_order(self) -> None:
         import json
         import uuid

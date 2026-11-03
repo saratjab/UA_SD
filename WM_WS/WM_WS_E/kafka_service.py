@@ -61,7 +61,11 @@ class EngineKafkaService:
         self._retry_thread.start()
 
     def worker(self, bootstrap: str, consumer: Any | None = None) -> KafkaWorker:
-        ws_id = self.engine.config.ws_id or "unassigned"
+        # The consumer group is per station; a shared "unassigned" group would
+        # split WS_COMMANDS partitions between unrelated Engines.
+        ws_id = self.engine.config.ws_id
+        if not ws_id:
+            raise ValueError("the Engine needs its WS ID (from WM_WS_M) before consuming commands")
         return KafkaWorker(
             bootstrap,
             f"wm-ws-engine-{ws_id}-v1",
@@ -82,6 +86,8 @@ class EngineKafkaService:
             "Engine command handler entered event=%s ws_id=%s request_id=%s",
             message.get("event_type"), message.get("ws_id"), message.get("request_id"),
         )
+        if self.engine.config.ws_id is None:
+            raise RuntimeError("Engine has no WS ID yet; command left uncommitted")
         if message.get("ws_id") != self.engine.config.ws_id: return
         event_type = message.get("event_type")
         if event_type == "START_IRRIGATION":
@@ -222,7 +228,10 @@ class EngineKafkaService:
     def _publish(self, event_type: str, request_id: str, operator_id: str, payload: dict[str, Any]) -> None:
         message = self._event(event_type, request_id, operator_id, payload)
         if event_type != "IRRIGATION_TELEMETRY":
-            self._store.execute("INSERT OR IGNORE INTO engine_outbox VALUES (?, ?)", (message["message_id"], json.dumps(message, separators=(",", ":"), sort_keys=True)))
+            # The SQLite connection is shared by the Kafka, irrigation and retry
+            # threads; an unlocked write could join another thread's transaction.
+            with self._lock:
+                self._store.execute("INSERT OR IGNORE INTO engine_outbox VALUES (?, ?)", (message["message_id"], json.dumps(message, separators=(",", ":"), sort_keys=True)))
             self.flush_outbox()
         else:
             self.publisher.publish_nowait(WS_EVENTS, message)
@@ -279,4 +288,5 @@ class EngineKafkaService:
     def close(self) -> None:
         self._retry_stop.set()
         self._retry_thread.join(timeout=2.0)
-        self._store.close()
+        with self._lock:
+            self._store.close()

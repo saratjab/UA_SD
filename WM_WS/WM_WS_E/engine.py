@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import socket
 import threading
+import time
 
 from common import protocol
 
@@ -46,6 +47,17 @@ class WateringStationEngine:
     @property
     def monitor_available(self) -> bool:
         return self._monitor_ready.is_set()
+
+    def wait_until_monitor_ready(self, timeout: float | None = None) -> bool:
+        """Block until a Monitor accepted this Engine (and assigned its WS ID)."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not self._stop_event.is_set():
+            remaining = 0.2 if deadline is None else min(0.2, deadline - time.monotonic())
+            if remaining <= 0:
+                return self._monitor_ready.is_set()
+            if self._monitor_ready.wait(remaining):
+                return True
+        return False
 
     def connect_to_monitor(self) -> None:
         LOGGER.info("Connecting to WM_WS_M at %s:%s", self.config.monitor_host, self.config.monitor_port)
