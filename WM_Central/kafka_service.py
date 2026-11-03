@@ -12,6 +12,7 @@ from typing import Any
 
 from common.kafka_contract import (ACTIVATION_REQUESTS, COMMAND_REJECTION_REASONS, OPERATOR_EVENTS, WS_COMMANDS, WS_EVENTS,
                                    MessageValidationError, decode, envelope, message_key)
+from common.event_panel import describe, feed
 from common.kafka_transport import KafkaPublisher, KafkaWorker
 
 from .database import Database
@@ -90,6 +91,18 @@ class CentralKafkaService:
                 except Exception:
                     LOGGER.exception("Central outbox item remains pending message_id=%s", message_id)
                     break
+                self._record_out(topic, message)
+
+    @staticmethod
+    def _peer(topic: str, message: dict[str, Any]) -> str:
+        if topic == OPERATOR_EVENTS:
+            return f"WM_FO {message.get('operator_id', '')}".strip()
+        return f"WM_WS_E {message.get('ws_id', '')}".strip()
+
+    def _record_out(self, topic: str, message: dict[str, Any]) -> None:
+        feed().record("OUT", self._peer(topic, message), message.get("event_type", "?"),
+                      ws_id=message.get("ws_id"), request_id=message.get("request_id"),
+                      detail=describe(message.get("payload")))
 
     @staticmethod
     def _outgoing(topic: str, event_type: str, payload: dict[str, Any], identity: str,
@@ -111,6 +124,9 @@ class CentralKafkaService:
     def handle_activation_bytes(self, raw: bytes) -> bool:
         try:
             message = decode(raw)
+            feed().record("IN", f"WM_FO {message.get('operator_id', '')}".strip(), message["event_type"],
+                          ws_id=message.get("ws_id"), request_id=message.get("request_id"),
+                          detail=describe(message["payload"]))
             if message["event_type"] == "AVAILABLE_STATIONS_REQUEST":
                 self.handle_available_stations_request(message)
             else:
@@ -223,7 +239,11 @@ class CentralKafkaService:
 
     def handle_engine_bytes(self, raw: bytes) -> bool:
         try:
-            self.handle_engine_event(decode(raw)); return True
+            message = decode(raw)
+            feed().record("IN", f"WM_WS_E {message.get('ws_id', '')}".strip(), message["event_type"],
+                          ws_id=message.get("ws_id"), request_id=message.get("request_id"),
+                          detail=describe(message["payload"]))
+            self.handle_engine_event(message); return True
         except MessageValidationError as exc:
             LOGGER.warning("Discarding malformed Engine event: %s", exc); return True
 
@@ -309,7 +329,8 @@ class CentralKafkaService:
                                           f"IRRIGATION_PROGRESS:{record.request_id}:{seq}",
                                           operator_id=record.operator_id, ws_id=record.ws_id,
                                           request_id=record.request_id, key=record.operator_id)
-                self.publisher.publish_nowait(OPERATOR_EVENTS, progress[3], key=record.operator_id)
+                if self.publisher.publish_nowait(OPERATOR_EVENTS, progress[3], key=record.operator_id):
+                    self._record_out(OPERATOR_EVENTS, progress[3])
 
     def start_irrigation(self, ws_id: str, duration_seconds: int | None, operator_id: str,
                          target_volume_liters: float | None = None, *, request_id: str | None = None) -> str:
@@ -319,6 +340,8 @@ class CentralKafkaService:
                    {"target_volume_liters": target_volume_liters} if target_volume_liters is not None else {})
         message = envelope("ACTIVATION_REQUEST", payload,
                            ws_id=ws_id, operator_id=operator_id, request_id=request_id)
+        feed().record("LOCAL", "CENTRAL controls", "ACTIVATION_REQUEST", ws_id=ws_id,
+                      request_id=request_id, detail=describe(payload))
         self.handle_activation(message)
         return request_id
 

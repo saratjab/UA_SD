@@ -8,6 +8,7 @@ import threading
 import time
 
 from common import protocol
+from common.event_panel import feed
 from .central_client import CentralClient
 from .config import MonitorConfig
 from .ws_e_server import EngineServer
@@ -136,6 +137,7 @@ class WateringStationMonitor:
     def activate_fault(self, fault: str, details: str) -> bool:
         if self._fault_active:
             return True
+        feed().record("LOCAL", "WM_WS_E", f"ENGINE_{fault.upper()}", ws_id=self.config.ws_id, detail=details)
         reported = self.report_fault(fault, details)
         if reported:
             self._fault_active = True
@@ -157,6 +159,7 @@ class WateringStationMonitor:
         if resolved:
             self._fault_active = False
             self._fault_sync_needed = False
+            feed().record("LOCAL", "WM_WS_E", "ENGINE_HEALTHY", ws_id=self.config.ws_id)
 
         return resolved
 

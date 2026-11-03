@@ -75,6 +75,21 @@ def reset_feed() -> EventFeed:
     return _FEED
 
 
+def describe(payload: Any) -> str:
+    """Compact one-line summary of a message payload for the panel."""
+    if not isinstance(payload, dict):
+        return "" if payload is None else str(payload)
+    parts = []
+    for key, value in payload.items():
+        if isinstance(value, list):
+            parts.append(f"{key}={len(value)}")
+        elif isinstance(value, float):
+            parts.append(f"{key}={value:.2f}")
+        elif value is not None:
+            parts.append(f"{key}={value}")
+    return ", ".join(parts)
+
+
 def events_payload(after_raw: str | None, source: EventFeed | None = None) -> dict[str, Any]:
     try:
         after = max(0, int(after_raw or "0"))

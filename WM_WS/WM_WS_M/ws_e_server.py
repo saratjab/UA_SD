@@ -5,6 +5,7 @@ import socket
 from typing import Callable
 
 from common import protocol
+from common.event_panel import feed
 
 
 LOGGER = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class EngineServer:
             hello = protocol.receive_message(conn)
             if self._is_valid_hello(hello):
                 protocol.send_message(conn, protocol.hello_ack_message(self.ws_id))
+                feed().record("IN", "WM_WS_E", "HELLO_WS_E", ws_id=self.ws_id, detail="Engine accepted")
                 return True
 
             if hello.get("type") != protocol.HELLO_WS_E:
@@ -75,6 +77,7 @@ class EngineServer:
             else:
                 reason = "wrong_ws_id"
             LOGGER.warning("Rejecting WM_WS_E connection: %s", reason)
+            feed().record("IN", "WM_WS_E", "HELLO_REJECTED", ws_id=self.ws_id, detail=reason)
             protocol.send_message(conn, protocol.nack_message(reason))
             return False
         except socket.timeout:

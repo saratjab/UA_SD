@@ -12,6 +12,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from common.kafka_contract import WS_COMMANDS, WS_EVENTS, MessageValidationError, decode, envelope
+from common.event_panel import describe, feed
 from common.kafka_transport import KafkaPublisher, KafkaWorker
 from .irrigation import IrrigationRequest, IrrigationResult, IrrigationTelemetry
 
@@ -90,6 +91,8 @@ class EngineKafkaService:
             raise RuntimeError("Engine has no WS ID yet; command left uncommitted")
         if message.get("ws_id") != self.engine.config.ws_id: return
         event_type = message.get("event_type")
+        feed().record("IN", "WM_Central", str(event_type), ws_id=message.get("ws_id"),
+                      request_id=message.get("request_id"), detail=describe(message.get("payload")))
         if event_type == "START_IRRIGATION":
             request_id, operator_id = message.get("request_id"), message.get("operator_id")
             payload = message["payload"]
@@ -233,8 +236,8 @@ class EngineKafkaService:
             with self._lock:
                 self._store.execute("INSERT OR IGNORE INTO engine_outbox VALUES (?, ?)", (message["message_id"], json.dumps(message, separators=(",", ":"), sort_keys=True)))
             self.flush_outbox()
-        else:
-            self.publisher.publish_nowait(WS_EVENTS, message)
+        elif self.publisher.publish_nowait(WS_EVENTS, message):
+            self._record_out(message)
         LOGGER.info(
             "Engine event published event=%s ws_id=%s request_id=%s",
             event_type, self.engine.config.ws_id, request_id,
@@ -256,9 +259,15 @@ class EngineKafkaService:
                     LOGGER.exception("Engine final event remains pending message_id=%s", message_id)
                     break
                 message = json.loads(raw)
+                self._record_out(message)
                 if message.get("event_type") == "IRRIGATION_COMPLETED":
                     self._store.execute("UPDATE engine_requests SET status='COMPLETED' WHERE request_id=?", (message.get("request_id"),))
                 self._store.execute("DELETE FROM engine_outbox WHERE message_id=?", (message_id,))
+
+    @staticmethod
+    def _record_out(message: dict[str, Any]) -> None:
+        feed().record("OUT", "WM_Central", message.get("event_type", "?"), ws_id=message.get("ws_id"),
+                      request_id=message.get("request_id"), detail=describe(message.get("payload")))
 
     def _restore_interrupted_request(self) -> None:
         self.engine.irrigation.valve.close()
