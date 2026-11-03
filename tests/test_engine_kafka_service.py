@@ -23,6 +23,12 @@ class FakePublisher:
     def publish(self, topic, message) -> None:
         if self.fail or message.get("event_type") == self.fail_event: raise RuntimeError("simulated broker outage")
         self.records.append((topic, message))
+    def publish_nowait(self, topic, message) -> bool:
+        try:
+            self.publish(topic, message)
+            return True
+        except RuntimeError:
+            return False
 
 
 class OneMessage:

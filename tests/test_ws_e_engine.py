@@ -316,6 +316,37 @@ class IrrigationTests(unittest.TestCase):
         controller = IrrigationController("WS_001", SolenoidValve(), FlowMeter(60.0), telemetry_interval=0.01)
         self.assertFalse(controller.stop())
 
+    def test_failing_telemetry_callback_still_finishes_and_closes_valve(self) -> None:
+        def broker_outage(_telemetry) -> None:
+            raise RuntimeError("Kafka delivery timed out")
+
+        valve = SolenoidValve()
+        controller = IrrigationController(
+            "WS_001", valve, FlowMeter(60.0), telemetry_interval=0.01,
+            telemetry_callback=broker_outage,
+        )
+        with self.assertLogs("WM_WS.WM_WS_E.irrigation", level="ERROR"):
+            self.assertTrue(controller.start(IrrigationRequest("operator-1", 0.03)))
+            self.assertTrue(controller.wait_until_finished(timeout=2))
+        self.assertEqual(controller.state, IrrigationState.IDLE)
+        self.assertFalse(valve.is_open)
+        self.assertEqual(controller.last_result.stopped_by, "duration")
+        self.assertTrue(controller.start(IrrigationRequest("operator-1", 0.01)))
+        self.assertTrue(controller.wait_until_finished(timeout=2))
+
+    def test_failing_result_callback_still_returns_to_idle(self) -> None:
+        def failing_result(_result, _stopped_by) -> None:
+            raise RuntimeError("outbox unavailable")
+
+        controller = IrrigationController(
+            "WS_001", SolenoidValve(), FlowMeter(60.0), telemetry_interval=0.01,
+            result_callback=failing_result,
+        )
+        with self.assertLogs("WM_WS.WM_WS_E.irrigation", level="ERROR"):
+            self.assertTrue(controller.start(IrrigationRequest("operator-1", 0.01)))
+            self.assertTrue(controller.wait_until_finished(timeout=2))
+        self.assertEqual(controller.state, IrrigationState.IDLE)
+
 
 if __name__ == "__main__":
     unittest.main()

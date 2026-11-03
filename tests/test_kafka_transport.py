@@ -150,6 +150,24 @@ class KafkaWorkerTests(unittest.TestCase):
             publisher.publish(topic, envelope(event_type, {}, **identifiers))
         self.assertEqual([record[1] for record in producer.records], [case[3] for case in cases])
 
+    def test_best_effort_publish_never_flushes_or_raises_on_full_queue(self) -> None:
+        from common.kafka_contract import envelope
+
+        class SaturatedProducer(FakeProducer):
+            polls = 0
+            def produce(self, *_args, **_kwargs): raise BufferError("queue full")
+            def poll(self, _timeout): self.polls += 1
+            def flush(self, _timeout): raise AssertionError("best-effort send must not block on flush")
+
+        healthy = FakeProducer()
+        healthy.poll = lambda _timeout: 0
+        healthy.flush = SaturatedProducer.flush.__get__(healthy)
+        message = envelope("IRRIGATION_TELEMETRY", {}, ws_id="WS_001")
+        self.assertTrue(KafkaPublisher("localhost:9092", healthy).publish_nowait(WS_EVENTS, message))
+        self.assertEqual(healthy.records[0][1], "WS_001")
+        with self.assertLogs("common.kafka_transport", level="WARNING"):
+            self.assertFalse(KafkaPublisher("localhost:9092", SaturatedProducer()).publish_nowait(WS_EVENTS, message))
+
     def test_publisher_rejects_missing_or_wrong_partition_key(self) -> None:
         publisher = KafkaPublisher("localhost:9092", FakeProducer())
         from common.kafka_contract import envelope

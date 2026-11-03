@@ -111,7 +111,8 @@ class KafkaPublisher:
             })
         self._producer = producer
 
-    def publish(self, topic: str, message: dict[str, Any], *, key: str | None = None) -> None:
+    @staticmethod
+    def _partition_key(topic: str, message: dict[str, Any], key: str | None) -> str | None:
         if topic in TOPIC_KEYS:
             expected_key = message_key(topic, message)
             if expected_key is None:
@@ -119,6 +120,29 @@ class KafkaPublisher:
             if key is not None and key != expected_key:
                 raise ValueError(f"{topic} partition key must match {TOPIC_KEYS[topic]}")
             key = expected_key
+        return key
+
+    def publish_nowait(self, topic: str, message: dict[str, Any], *, key: str | None = None) -> bool:
+        """Best-effort send for replaceable data such as telemetry.
+
+        Never blocks on the broker and never raises for delivery problems: a
+        lost progress sample is superseded by the next one, while a blocked
+        caller (the irrigation loop) would be a real fault.
+        """
+        key = self._partition_key(topic, message, key)
+        def report(err: Any, _msg: Any) -> None:
+            if err:
+                LOGGER.warning("Best-effort Kafka delivery failed topic=%s: %s", topic, err)
+        try:
+            self._producer.produce(topic, encode(message), key=key, on_delivery=report)
+            self._producer.poll(0)
+            return True
+        except (BufferError, KafkaException) as exc:
+            LOGGER.warning("Best-effort Kafka send dropped topic=%s: %s", topic, exc)
+            return False
+
+    def publish(self, topic: str, message: dict[str, Any], *, key: str | None = None) -> None:
+        key = self._partition_key(topic, message, key)
         delivered: list[Exception] = []
         def report(err: Any, _msg: Any) -> None:
             if err:

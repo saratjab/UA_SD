@@ -167,7 +167,7 @@ class EngineKafkaService:
         with self._lock:
             if not self._request_id: return
             request_id, operator_id = self._request_id, self._operator_id
-            reason = ("ENGINE_FAULT" if self.engine.failed else
+            reason = ("ENGINE_FAULT" if self.engine.failed or stopped_by == "engine_error" else
                       "MONITOR_DISCONNECTED" if stopped_by == "monitor_disconnected" else
                       "TIME_LIMIT" if stopped_by == "duration" else
                       "TARGET_VOLUME" if stopped_by == "target_volume" else self._end_reason)
@@ -199,7 +199,7 @@ class EngineKafkaService:
             self._store.execute("INSERT OR IGNORE INTO engine_outbox VALUES (?, ?)", (message["message_id"], json.dumps(message, separators=(",", ":"), sort_keys=True)))
             self.flush_outbox()
         else:
-            self.publisher.publish(WS_EVENTS, message)
+            self.publisher.publish_nowait(WS_EVENTS, message)
         LOGGER.info(
             "Engine event published event=%s ws_id=%s request_id=%s",
             event_type, self.engine.config.ws_id, request_id,
