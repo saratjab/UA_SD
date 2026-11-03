@@ -407,7 +407,8 @@ class Database:
 
     def reject_authorized_irrigation(self, request_id: str, reason: DenyReason, outgoing: list[tuple[str, str, str | None, dict[str, Any]]] | None = None) -> bool:
         """Record an Engine rejection before watering as DENIED, not ENDED."""
-        if reason not in {DenyReason.ENGINE_BLOCKED, DenyReason.ENGINE_FAILED, DenyReason.MONITOR_UNAVAILABLE}:
+        if reason not in {DenyReason.ENGINE_BLOCKED, DenyReason.ENGINE_FAILED, DenyReason.MONITOR_UNAVAILABLE,
+                          DenyReason.WS_BUSY}:
             raise ValueError("reason must describe an Engine start rejection")
         with self.transaction() as conn:
             cursor = conn.execute(
@@ -417,6 +418,36 @@ class Database:
             )
             self._insert_outgoing(conn, outgoing or [])
         return cursor.rowcount == 1
+
+    def expire_stale_authorizations(
+        self,
+        older_than_s: float,
+        now: datetime,
+        outgoing_factory: Callable[[IrrigationRecord], list[tuple[str, str, str | None, dict[str, Any]]]],
+    ) -> list[IrrigationRecord]:
+        """Deny AUTHORIZED requests the Engine never started or rejected.
+
+        Without this, a lost START or a silent Engine leaves the row live, and
+        the partial unique index then denies every later request as WS_BUSY.
+        """
+        expired: list[IrrigationRecord] = []
+        with self.transaction() as conn:
+            rows = conn.execute("SELECT * FROM irrigations WHERE status = 'AUTHORIZED'").fetchall()
+            for row in rows:
+                requested = datetime.fromisoformat(row["requested_at"].replace("Z", "+00:00"))
+                if (now - requested).total_seconds() <= older_than_s:
+                    continue
+                conn.execute(
+                    "UPDATE irrigations SET status = 'DENIED', deny_reason = 'ENGINE_FAILED' "
+                    "WHERE irrigation_id = ? AND status = 'AUTHORIZED'",
+                    (row["irrigation_id"],),
+                )
+                record = _irrigation(conn.execute(
+                    "SELECT * FROM irrigations WHERE irrigation_id = ?", (row["irrigation_id"],)
+                ).fetchone())
+                self._insert_outgoing(conn, outgoing_factory(record))
+                expired.append(record)
+        return expired
 
     def end_irrigation(
         self,

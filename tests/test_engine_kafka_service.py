@@ -325,6 +325,34 @@ class EngineKafkaTests(unittest.TestCase):
             self.assertEqual(events[0]["message_id"], message_id)
             self.assertEqual(restarted._store.execute("SELECT COUNT(*) FROM engine_outbox").fetchone()[0], 0)
 
+    def rejected_reasons(self, publisher) -> list[str]:
+        return [m["payload"]["reason"] for _, m in publisher.records if m["event_type"] == "COMMAND_REJECTED"]
+
+    def test_start_while_busy_is_rejected_instead_of_silently_ignored(self) -> None:
+        publisher = FakePublisher()
+        engine = self.engine(IrrigationController("WS_001", SolenoidValve(), FlowMeter(6), .01))
+        service = EngineKafkaService(engine, publisher)
+        service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 5}, ws_id="WS_001", operator_id="OP", request_id="first"))
+        service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 5}, ws_id="WS_001", operator_id="OP", request_id="second"))
+        self.assertEqual(self.rejected_reasons(publisher), ["ENGINE_BUSY"])
+        self.assertIn("ENGINE_BUSY", COMMAND_REJECTION_REASONS)
+        service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 5}, ws_id="WS_001", operator_id="OP", request_id="first"))
+        self.assertEqual(self.rejected_reasons(publisher), ["ENGINE_BUSY"])
+        engine.stop_irrigation(); engine.irrigation.wait_until_finished(1)
+        service.close()
+
+    def test_expired_start_command_is_rejected_and_never_opens_the_valve(self) -> None:
+        publisher = FakePublisher()
+        engine = self.engine()
+        service = EngineKafkaService(engine, publisher)
+        command = envelope("START_IRRIGATION", {"duration_seconds": 5}, ws_id="WS_001", operator_id="OP", request_id="stale")
+        command["timestamp"] = "2020-01-01T00:00:00Z"
+        service.handle_command(command)
+        self.assertEqual(self.rejected_reasons(publisher), ["COMMAND_EXPIRED"])
+        self.assertFalse(engine.irrigation.valve.is_open)
+        self.assertEqual(engine.irrigation.state.value, "IDLE")
+        service.close()
+
     def test_outbox_flushes_in_insertion_order_not_message_id_order(self) -> None:
         import json
         import uuid

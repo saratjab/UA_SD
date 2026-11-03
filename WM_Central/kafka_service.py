@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid5
 from uuid import uuid4
 from dataclasses import dataclass
@@ -35,6 +36,10 @@ class CentralKafkaService:
     Consumers commit only after this service returns successfully.  SQLite's unique
     request id and idempotent transitions make an at-least-once Kafka delivery safe.
     """
+    # Must exceed the Engine's COMMAND_TTL_SECONDS (60 s) plus any clock skew,
+    # so an Engine never starts a request that has already been expired here.
+    AUTHORIZATION_TIMEOUT_SECONDS = 90.0
+
     def __init__(self, db: Database, state: StateManager, publisher: KafkaPublisher) -> None:
         self.db, self.state, self.publisher = db, state, publisher
         self.latest_telemetry: dict[str, LatestTelemetry] = {}
@@ -129,10 +134,13 @@ class CentralKafkaService:
         elif not operator.active:
             error = "OPERATOR_INACTIVE"
         else:
+            # A station with a pending (AUTHORIZED) request still displays as
+            # AVAILABLE, but a new request would be denied as WS_BUSY.
+            live = self.db.live_irrigations()
             stations = [
                 {"station_id": view.ws_id, "location": view.location}
                 for view in self.state.snapshot()
-                if view.status is StationStatus.AVAILABLE
+                if view.status is StationStatus.AVAILABLE and view.ws_id not in live
             ]
         row = self._outgoing(
             OPERATOR_EVENTS,
@@ -250,13 +258,30 @@ class CentralKafkaService:
         elif event_type == "COMMAND_REJECTED":
             reason = {"ENGINE_BLOCKED": DenyReason.ENGINE_BLOCKED,
                       "ENGINE_FAILED": DenyReason.ENGINE_FAILED,
-                      "MONITOR_UNAVAILABLE": DenyReason.MONITOR_UNAVAILABLE}.get(payload.get("reason"))
+                      "MONITOR_UNAVAILABLE": DenyReason.MONITOR_UNAVAILABLE,
+                      "ENGINE_BUSY": DenyReason.WS_BUSY,
+                      "COMMAND_EXPIRED": DenyReason.ENGINE_FAILED}.get(payload.get("reason"))
             if payload.get("reason") not in COMMAND_REJECTION_REASONS or reason is None:
                 raise MessageValidationError("invalid command rejection reason")
             outgoing = [self._outgoing(OPERATOR_EVENTS, "COMMAND_REJECTED", payload, f"rejected:{request_id}", operator_id=record.operator_id, ws_id=ws_id, request_id=request_id, key=record.operator_id)] if record.operator_id else []
             self.db.reject_authorized_irrigation(request_id, reason, outgoing)
             self.flush_outbox()
         else: raise MessageValidationError("unsupported Engine event_type")
+
+    def expire_stale_authorizations(self, now: datetime | None = None) -> int:
+        """Release stations whose START was never answered by the Engine."""
+        def notify(record: IrrigationRecord) -> list[tuple[str, str, str | None, dict[str, Any]]]:
+            LOGGER.warning("START for request %s on %s timed out; request denied", record.request_id, record.ws_id)
+            if not record.operator_id:
+                return []
+            return [self._outgoing(OPERATOR_EVENTS, "COMMAND_REJECTED", {"reason": "START_TIMEOUT"},
+                                   f"rejected:{record.request_id}", operator_id=record.operator_id,
+                                   ws_id=record.ws_id, request_id=record.request_id, key=record.operator_id)]
+        expired = self.db.expire_stale_authorizations(
+            self.AUTHORIZATION_TIMEOUT_SECONDS, now or datetime.now(timezone.utc), notify)
+        if expired:
+            self.flush_outbox()
+        return len(expired)
 
     def _telemetry(self, record: Any, message: dict[str, Any]) -> None:
         p, seq = message["payload"], message["payload"].get("sequence")

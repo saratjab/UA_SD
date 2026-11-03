@@ -6,6 +6,7 @@ import json
 import math
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -15,6 +16,19 @@ from common.kafka_transport import KafkaPublisher, KafkaWorker
 from .irrigation import IrrigationRequest, IrrigationResult, IrrigationTelemetry
 
 LOGGER = logging.getLogger(__name__)
+
+# A START older than this is never executed. Central expires AUTHORIZED rows
+# after a longer delay (CentralKafkaService.AUTHORIZATION_TIMEOUT_SECONDS), so
+# an Engine can never start a request that Central has already closed.
+COMMAND_TTL_SECONDS = 60.0
+
+
+def _command_age_seconds(message: dict[str, Any]) -> float:
+    """Age of a command from its envelope timestamp (validated ISO-8601 by decode)."""
+    sent = datetime.fromisoformat(message["timestamp"].replace("Z", "+00:00"))
+    if sent.tzinfo is None:
+        sent = sent.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - sent).total_seconds()
 
 
 class EngineKafkaService:
@@ -90,8 +104,13 @@ class EngineKafkaService:
             with self._lock:
                 if self._store.execute("SELECT 1 FROM engine_requests WHERE request_id=?", (request_id,)).fetchone():
                     return
+                # Every refusal is reported: Central keeps the request AUTHORIZED
+                # (and the station busy) until it hears back from the Engine.
+                if _command_age_seconds(message) > COMMAND_TTL_SECONDS:
+                    LOGGER.warning("Rejecting expired START_IRRIGATION request_id=%s", request_id)
+                    self._reject_start(request_id, operator_id, "COMMAND_EXPIRED"); return
                 if self._request_id is not None or self.engine.irrigation.state.value != "IDLE":
-                    return
+                    self._reject_start(request_id, operator_id, "ENGINE_BUSY"); return
                 self._request_id, self._operator_id, self._sequence, self._end_reason = request_id, operator_id, 0, "MANUAL_STOP"
                 self._target_volume_liters = float(target_volume) if target_volume is not None else None
                 self._store.execute("INSERT OR REPLACE INTO engine_active (ws_id, request_id, operator_id, duration, target_volume, elapsed, volume, end_reason) VALUES (?, ?, ?, ?, ?, 0, 0, 'MANUAL_STOP')", (self.engine.config.ws_id, request_id, operator_id, float(duration) if duration is not None else None, float(target_volume) if target_volume is not None else None))
@@ -104,7 +123,7 @@ class EngineKafkaService:
                         "ENGINE_BLOCKED" if self.engine.blocked else
                         "MONITOR_UNAVAILABLE"
                     )
-                    self._publish("COMMAND_REJECTED", request_id, operator_id, {"reason": reason}); return
+                    self._reject_start(request_id, operator_id, reason); return
                 self._store.execute("INSERT INTO engine_requests VALUES (?, 'ACTIVE')", (request_id,))
             LOGGER.info("Engine irrigation accepted ws_id=%s request_id=%s", self.engine.config.ws_id, request_id)
             self._publish("IRRIGATION_STARTED", request_id, operator_id, {})
@@ -130,6 +149,13 @@ class EngineKafkaService:
         elif event_type == "ACTIVATE_WS":
             if not self.engine.failed: self.engine.blocked = False
         else: raise MessageValidationError("unsupported command")
+
+    def _reject_start(self, request_id: str, operator_id: str, reason: str) -> None:
+        """Report a refused START once and remember it, so a redelivered copy
+        can never start an irrigation that Central has already denied."""
+        with self._lock:
+            self._store.execute("INSERT OR IGNORE INTO engine_requests VALUES (?, 'REJECTED')", (request_id,))
+            self._publish("COMMAND_REJECTED", request_id, operator_id, {"reason": reason})
 
     def stop_local_irrigation(self, request_id: str) -> bool:
         """Stop this request, or remember its stop until Central authorizes it."""

@@ -32,6 +32,8 @@ COMMAND_REJECTION_REASONS = frozenset({
     "ENGINE_BLOCKED",
     "ENGINE_FAILED",
     "MONITOR_UNAVAILABLE",
+    "ENGINE_BUSY",
+    "COMMAND_EXPIRED",
 })
 
 REQUIRED = ("event_type", "message_id", "timestamp", "payload")

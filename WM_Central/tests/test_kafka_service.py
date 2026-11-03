@@ -313,6 +313,33 @@ class CentralKafkaTests(DatabaseTestCase):
         self.assertEqual(record.end_reason.value, "DISCONNECTED")
         self.assertEqual((record.duration_s, record.total_volume_l), (1.4, 0.14))
 
+    def test_engine_busy_rejection_releases_the_station(self) -> None:
+        self.service.handle_activation(self.request())
+        self.service.handle_engine_event(envelope("COMMAND_REJECTED", {"reason": "ENGINE_BUSY"},
+                                                  ws_id="WS_001", request_id="request-1"))
+        record = self.db.get_irrigation("request-1")
+        self.assertEqual((record.status, record.deny_reason), (IrrigationStatus.DENIED, DenyReason.WS_BUSY))
+        self.assertIsNone(self.db.get_live_irrigation("WS_001"))
+
+    def test_stale_authorization_is_expired_and_operator_notified(self) -> None:
+        from datetime import datetime, timedelta
+        self.service.handle_activation(self.request())
+        requested = datetime.fromisoformat(self.db.get_irrigation("request-1").requested_at.replace("Z", "+00:00"))
+        self.assertEqual(self.service.expire_stale_authorizations(now=requested + timedelta(seconds=60)), 0)
+        self.assertEqual(self.service.expire_stale_authorizations(now=requested + timedelta(seconds=91)), 1)
+        record = self.db.get_irrigation("request-1")
+        self.assertEqual((record.status, record.deny_reason), (IrrigationStatus.DENIED, DenyReason.ENGINE_FAILED))
+        rejected = [m for topic, m in self.publisher.records
+                    if topic == "wm.operator.events" and m["event_type"] == "COMMAND_REJECTED"]
+        self.assertEqual(rejected[-1]["payload"]["reason"], "START_TIMEOUT")
+        self.assertEqual(self.service.expire_stale_authorizations(now=requested + timedelta(seconds=200)), 0)
+
+    def test_station_with_pending_authorization_is_not_listed_as_available(self) -> None:
+        self.service.handle_activation(self.request())
+        self.service.handle_activation_bytes(encode(envelope("AVAILABLE_STATIONS_REQUEST", {}, operator_id="OP_002", request_id="list-1")))
+        response = next(m for topic, m in self.publisher.records if m["event_type"] == "AVAILABLE_STATIONS_RESPONSE")
+        self.assertEqual(response["payload"]["stations"], [])
+
     def test_monitor_unavailable_rejection_is_valid_and_persisted(self) -> None:
         self.service.handle_activation(self.request())
         self.service.handle_engine_event(envelope(

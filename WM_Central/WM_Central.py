@@ -118,7 +118,16 @@ def _poll_worker(worker: object) -> None:
 
 
 def _outbox_loop(service: CentralKafkaService, stop: threading.Event) -> None:
-    while not stop.wait(1.0):
+    ticks = 0
+    while True:
+        if ticks % 5 == 0:
+            try:
+                service.expire_stale_authorizations()
+            except Exception:
+                LOGGER.exception("Could not expire stale irrigation authorizations")
+        if stop.wait(1.0):
+            return
+        ticks += 1
         service.flush_outbox()
 
 
