@@ -325,6 +325,22 @@ class EngineKafkaTests(unittest.TestCase):
             self.assertEqual(events[0]["message_id"], message_id)
             self.assertEqual(restarted._store.execute("SELECT COUNT(*) FROM engine_outbox").fetchone()[0], 0)
 
+    def test_outbox_flushes_in_insertion_order_not_message_id_order(self) -> None:
+        import json
+        import uuid
+        publisher = FakePublisher()
+        service = EngineKafkaService(self.engine(), publisher)
+        expected = []
+        for index in range(20):
+            message = envelope("IRRIGATION_STARTED" if index % 2 == 0 else "IRRIGATION_COMPLETED", {},
+                               ws_id="WS_001", request_id=f"r{index}")
+            message["message_id"] = str(uuid.uuid4())
+            service._store.execute("INSERT INTO engine_outbox VALUES (?, ?)", (message["message_id"], json.dumps(message)))
+            expected.append(message["message_id"])
+        service.flush_outbox()
+        self.assertEqual([message["message_id"] for _, message in publisher.records], expected)
+        service.close()
+
     def test_restart_closes_valve_and_reports_interrupted_result(self) -> None:
         import sqlite3
         with tempfile.TemporaryDirectory() as temp:

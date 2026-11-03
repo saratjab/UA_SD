@@ -151,8 +151,13 @@ class Database:
             )
 
     def pending_outgoing(self, limit: int = 100) -> list[tuple[str, str, str | None, dict[str, Any]]]:
-        import json
-        rows = self._all("SELECT message_id, topic, message_key, message_json FROM kafka_outbox WHERE delivered_at IS NULL ORDER BY created_at, message_id LIMIT ?", (limit,))
+        """Undelivered messages in insertion order.
+
+        ``rowid`` grows with every insert, so it preserves the order in which
+        decisions were made; timestamps (1 s precision) and random message IDs
+        do not, and Kafka only keeps per-partition order of what we send.
+        """
+        rows = self._all("SELECT message_id, topic, message_key, message_json FROM kafka_outbox WHERE delivered_at IS NULL ORDER BY rowid LIMIT ?", (limit,))
         return [(r["message_id"], r["topic"], r["message_key"], json.loads(r["message_json"])) for r in rows]
 
     def mark_outgoing_delivered(self, message_id: str) -> None:

@@ -259,5 +259,20 @@ class IrrigationTests(DatabaseTestCase):
         self.assertEqual(results.count(IrrigationStatus.DENIED), 7)
 
 
+class OutboxTests(DatabaseTestCase):
+    def test_pending_messages_keep_insertion_order_within_the_same_second(self) -> None:
+        """Random message IDs must never reorder BLOCK/ACTIVATE for one station."""
+        import uuid
+
+        expected = []
+        for index in range(20):
+            event_type = "BLOCK_WS" if index % 2 == 0 else "ACTIVATE_WS"
+            message_id = str(uuid.uuid4())
+            message = {"event_type": event_type, "message_id": message_id, "ws_id": "WS_001"}
+            self.db.add_outgoing(message_id, "wm.ws.commands", "WS_001", message)
+            expected.append(message_id)
+        self.assertEqual([row[0] for row in self.db.pending_outgoing()], expected)
+
+
 if __name__ == "__main__":
     unittest.main()

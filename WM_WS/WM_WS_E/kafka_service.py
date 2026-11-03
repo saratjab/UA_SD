@@ -213,7 +213,7 @@ class EngineKafkaService:
 
     def flush_outbox(self) -> None:
         with self._lock:
-            rows = self._store.execute("SELECT message_id, message_json FROM engine_outbox ORDER BY message_id").fetchall()
+            rows = self._store.execute("SELECT message_id, message_json FROM engine_outbox ORDER BY rowid").fetchall()
             for message_id, raw in rows:
                 try:
                     self.publisher.publish(WS_EVENTS, json.loads(raw))
