@@ -4,7 +4,7 @@ import unittest
 
 from common.kafka_contract import decode, encode, envelope
 from WM_Central.kafka_service import CentralKafkaService
-from WM_Central.models import DenyReason, IrrigationStatus
+from WM_Central.models import DenyReason, EndReason, IrrigationStatus
 from WM_Central.state_manager import StateManager
 from .helpers import DatabaseTestCase
 
@@ -382,6 +382,63 @@ class CentralKafkaTests(DatabaseTestCase):
         blocker.join(2)
         self.assertIsNone(self.db.get_live_irrigation("WS_001"))
         self.assertEqual(self.state.status_of("WS_001").value, "OUT_OF_SERVICE")
+
+    def submit_concurrently(self, requests: list[dict]) -> None:
+        import threading
+        barrier = threading.Barrier(len(requests))
+        failures: list[BaseException] = []
+
+        def submit(message: dict) -> None:
+            barrier.wait()
+            try:
+                self.service.handle_activation_bytes(encode(message))
+            except BaseException as exc:
+                failures.append(exc)
+
+        threads = [threading.Thread(target=submit, args=(message,)) for message in requests]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        self.assertEqual(failures, [])
+
+    def replies_for(self, operator_id: str) -> list[dict]:
+        return [m for topic, m in self.publisher.records
+                if topic == "wm.operator.events" and m["event_type"] in {"ACTIVATION_AUTHORIZED", "ACTIVATION_DENIED"}
+                and m["operator_id"] == operator_id]
+
+    def test_two_operators_requesting_the_same_station_at_once_get_one_winner(self) -> None:
+        for _ in range(10):
+            self.publisher.records.clear()
+            for row in self.db.live_irrigations().values():
+                self.db.end_irrigation(row.request_id, EndReason.MANUAL)
+            run = len(self.db.list_irrigations())
+            self.submit_concurrently([
+                envelope("ACTIVATION_REQUEST", {"duration_seconds": 5}, ws_id="WS_001", operator_id=operator, request_id=f"{operator}-{run}")
+                for operator in ("OP_001", "OP_002")
+            ])
+            statuses = sorted(self.db.get_irrigation(f"{operator}-{run}").status.value for operator in ("OP_001", "OP_002"))
+            self.assertEqual(statuses, ["AUTHORIZED", "DENIED"])
+            denied = next(self.db.get_irrigation(f"{op}-{run}") for op in ("OP_001", "OP_002")
+                          if self.db.get_irrigation(f"{op}-{run}").status is IrrigationStatus.DENIED)
+            self.assertEqual(denied.deny_reason, DenyReason.WS_BUSY)
+            starts = [m for topic, m in self.publisher.records if topic == "wm.ws.commands"]
+            self.assertEqual(len(starts), 1)
+            for operator in ("OP_001", "OP_002"):
+                replies = self.replies_for(operator)
+                self.assertEqual(len(replies), 1)
+                self.assertEqual(replies[0]["request_id"], f"{operator}-{run}")
+
+    def test_two_operators_requesting_different_stations_at_once_are_both_authorized(self) -> None:
+        self.state.register("WS_002", "South", object())
+        self.submit_concurrently([
+            envelope("ACTIVATION_REQUEST", {"duration_seconds": 5}, ws_id="WS_001", operator_id="OP_001", request_id="a"),
+            envelope("ACTIVATION_REQUEST", {"duration_seconds": 5}, ws_id="WS_002", operator_id="OP_002", request_id="b"),
+        ])
+        self.assertEqual(self.db.get_irrigation("a").status, IrrigationStatus.AUTHORIZED)
+        self.assertEqual(self.db.get_irrigation("b").status, IrrigationStatus.AUTHORIZED)
+        self.assertEqual([m["event_type"] for m in self.replies_for("OP_001")], ["ACTIVATION_AUTHORIZED"])
+        self.assertEqual([m["event_type"] for m in self.replies_for("OP_002")], ["ACTIVATION_AUTHORIZED"])
 
     def test_monitor_unavailable_rejection_is_valid_and_persisted(self) -> None:
         self.service.handle_activation(self.request())

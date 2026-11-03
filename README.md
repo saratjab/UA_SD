@@ -42,6 +42,8 @@ docker compose --profile operator -f docker-compose.local.yml run --rm -it fo
 
 The default operator is `OP_001`. To use a different seeded operator, prefix the command with `FO_OPERATOR_ID=OP_002` (or `OP_003`). The FO lists available stations; enter a station ID and a positive duration in seconds. Type `q` to exit.
 
+Several FOs can run and send requests at the same time, but **each FO must use its own operator ID**. If two operators request the same station at once, Central authorizes exactly one; the other receives `ACTIVATION_DENIED WS_BUSY`. An operator ID belongs to one FO process at a time: the FO's Kafka consumer group is named after the ID so that a restarted FO can still show the results of requests it sent before the restart, and two processes sharing one ID would split that group and one of them would miss its replies.
+
 The Engine menu can be opened with:
 
 ```bash
