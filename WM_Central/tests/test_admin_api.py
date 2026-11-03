@@ -33,6 +33,13 @@ class FakePublisher:
             raise RuntimeError("simulated broker outage")
         self.records.append((topic, message, key))
 
+    def publish_nowait(self, topic: str, message: dict, *, key: str | None = None) -> bool:
+        try:
+            self.publish(topic, message, key=key)
+            return True
+        except RuntimeError:
+            return False
+
 
 class CentralAdminApiTests(DatabaseTestCase):
     def setUp(self) -> None:

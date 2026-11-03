@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import NAMESPACE_URL, uuid5
 from uuid import uuid4
 from dataclasses import dataclass
@@ -283,6 +283,12 @@ class CentralKafkaService:
             self.flush_outbox()
         return len(expired)
 
+    DELIVERED_RETENTION = timedelta(hours=24)
+
+    def prune_outbox(self, now: datetime | None = None) -> int:
+        cutoff = (now or datetime.now(timezone.utc)) - self.DELIVERED_RETENTION
+        return self.db.prune_delivered(cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z"))
+
     def _telemetry(self, record: Any, message: dict[str, Any]) -> None:
         p, seq = message["payload"], message["payload"].get("sequence")
         if not isinstance(seq, int) or seq < 0: raise MessageValidationError("telemetry sequence invalid")
@@ -291,7 +297,15 @@ class CentralKafkaService:
         if record.status is IrrigationStatus.WATERING and (old is None or old.request_id != values.request_id or seq > old.sequence):
             self.latest_telemetry[record.ws_id] = values
             self.state.update_telemetry(record.ws_id, values.flow_rate_lpm, values.accumulated_volume_liters)
-            self._notify(record.operator_id, record.request_id, record.ws_id, "IRRIGATION_PROGRESS", p)
+            if record.operator_id:
+                # Progress arrives every second and each sample replaces the
+                # previous one, so it skips the durable outbox; the final
+                # summary still goes through it.
+                progress = self._outgoing(OPERATOR_EVENTS, "IRRIGATION_PROGRESS", p,
+                                          f"IRRIGATION_PROGRESS:{record.request_id}:{seq}",
+                                          operator_id=record.operator_id, ws_id=record.ws_id,
+                                          request_id=record.request_id, key=record.operator_id)
+                self.publisher.publish_nowait(OPERATOR_EVENTS, progress[3], key=record.operator_id)
 
     def start_irrigation(self, ws_id: str, duration_seconds: int | None, operator_id: str,
                          target_volume_liters: float | None = None, *, request_id: str | None = None) -> str:

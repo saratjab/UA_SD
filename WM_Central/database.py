@@ -164,6 +164,19 @@ class Database:
         with self.transaction() as conn:
             conn.execute("UPDATE kafka_outbox SET delivered_at = ? WHERE message_id = ? AND delivered_at IS NULL", (self._clock(), message_id))
 
+    def prune_delivered(self, delivered_before: str) -> int:
+        """Delete delivered messages older than ``delivered_before`` (ISO-8601 UTC).
+
+        Delivered rows are only kept for a while for auditing; without pruning
+        the table grows for as long as Central runs.
+        """
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM kafka_outbox WHERE delivered_at IS NOT NULL AND delivered_at < ?",
+                (delivered_before,),
+            )
+        return cursor.rowcount
+
     def add_outgoing(self, message_id: str, topic: str, key: str | None, message: dict[str, Any]) -> None:
         with self.transaction() as conn:
             self._insert_outgoing(conn, [(message_id, topic, key, message)])

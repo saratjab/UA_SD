@@ -19,6 +19,12 @@ class FakePublisher:
             raise RuntimeError("simulated broker outage")
         self.records.append((topic, message))
         self.keys.append((topic, key))
+    def publish_nowait(self, topic: str, message: dict, *, key: str | None = None) -> bool:
+        try:
+            self.publish(topic, message, key=key)
+            return True
+        except RuntimeError:
+            return False
 
 
 class CentralKafkaTests(DatabaseTestCase):
@@ -339,6 +345,25 @@ class CentralKafkaTests(DatabaseTestCase):
         self.service.handle_activation_bytes(encode(envelope("AVAILABLE_STATIONS_REQUEST", {}, operator_id="OP_002", request_id="list-1")))
         response = next(m for topic, m in self.publisher.records if m["event_type"] == "AVAILABLE_STATIONS_RESPONSE")
         self.assertEqual(response["payload"]["stations"], [])
+
+    def test_progress_is_sent_best_effort_without_growing_the_outbox(self) -> None:
+        self.service.handle_activation(self.request())
+        self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {}, ws_id="WS_001", request_id="request-1"))
+        rows_before = self.db._one("SELECT COUNT(*) FROM kafka_outbox")[0]
+        self.publisher.fail_topics.add("wm.operator.events")
+        for sequence in (1, 2):
+            self.service.handle_engine_event(envelope(
+                "IRRIGATION_TELEMETRY", {"sequence": sequence, "flow_rate_lpm": 6.0,
+                                         "accumulated_volume_liters": 0.1 * sequence, "duration_seconds": sequence},
+                ws_id="WS_001", request_id="request-1"))
+        self.publisher.fail_topics.clear()
+        self.service.handle_engine_event(envelope(
+            "IRRIGATION_TELEMETRY", {"sequence": 3, "flow_rate_lpm": 6.0, "accumulated_volume_liters": 0.3, "duration_seconds": 3},
+            ws_id="WS_001", request_id="request-1"))
+        self.assertEqual(self.db._one("SELECT COUNT(*) FROM kafka_outbox")[0], rows_before)
+        progress = [m for topic, m in self.publisher.records if m["event_type"] == "IRRIGATION_PROGRESS"]
+        self.assertEqual([m["payload"]["sequence"] for m in progress], [3])
+        self.assertEqual(self.state.snapshot()[0].accumulated_volume_liters, 0.3)
 
     def test_monitor_unavailable_rejection_is_valid_and_persisted(self) -> None:
         self.service.handle_activation(self.request())

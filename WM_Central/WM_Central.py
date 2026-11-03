@@ -125,6 +125,11 @@ def _outbox_loop(service: CentralKafkaService, stop: threading.Event) -> None:
                 service.expire_stale_authorizations()
             except Exception:
                 LOGGER.exception("Could not expire stale irrigation authorizations")
+        if ticks % 3600 == 0:
+            try:
+                service.prune_outbox()
+            except Exception:
+                LOGGER.exception("Could not prune delivered outbox messages")
         if stop.wait(1.0):
             return
         ticks += 1

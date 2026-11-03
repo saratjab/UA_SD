@@ -22,6 +22,10 @@ class Publisher:
     def publish(self, topic: str, message: dict, *, key: str | None = None) -> None:
         self.records.append((topic, message))
 
+    def publish_nowait(self, topic: str, message: dict, *, key: str | None = None) -> bool:
+        self.records.append((topic, message))
+        return True
+
 
 class ControlAndMonitoringTests(DatabaseTestCase):
     def setUp(self) -> None:
