@@ -58,6 +58,70 @@ class FakeConsumer:
         self.closed = True
 
 
+class RecordMessage:
+    def __init__(self, offset: int) -> None: self._offset = offset
+    def error(self): return None
+    def value(self): return f"record-{self._offset}".encode()
+    def topic(self): return "wm.ws.events"
+    def partition(self): return 0
+    def offset(self): return self._offset
+
+
+class LogConsumer:
+    """Serves offsets 0..n-1 in order and honours seek(), like a real partition."""
+    def __init__(self, size: int) -> None:
+        self.size, self.next_offset = size, 0
+        self.committed_offsets: list[int] = []
+    def subscribe(self, _topics) -> None: pass
+    def assignment(self): return []
+    def poll(self, _timeout):
+        if self.next_offset >= self.size:
+            return None
+        message = RecordMessage(self.next_offset)
+        self.next_offset += 1
+        return message
+    def seek(self, partition) -> None: self.next_offset = partition.offset
+    def commit(self, *, message, asynchronous) -> None: self.committed_offsets.append(message.offset())
+    def close(self) -> None: pass
+
+
+class KafkaWorkerRetryTests(unittest.TestCase):
+    def worker(self, consumer, handler) -> KafkaWorker:
+        worker = KafkaWorker("unused", "group", ["wm.ws.events"], handler, consumer)
+        worker._backoff = lambda _attempt: None
+        return worker
+
+    def test_failed_record_is_retried_before_later_records_are_committed(self) -> None:
+        seen: list[bytes] = []
+        def flaky(value: bytes) -> bool:
+            seen.append(value)
+            if value == b"record-0" and seen.count(b"record-0") == 1:
+                raise RuntimeError("database is locked")
+            return True
+
+        consumer = LogConsumer(2)
+        worker = self.worker(consumer, flaky)
+        with self.assertLogs("common.kafka_transport", level="ERROR"):
+            for _ in range(4):
+                worker.poll_once(0)
+        self.assertEqual(seen, [b"record-0", b"record-0", b"record-1"])
+        self.assertEqual(consumer.committed_offsets, [0, 1])
+
+    def test_poison_record_is_skipped_after_bounded_attempts(self) -> None:
+        def always_fails(value: bytes) -> bool:
+            if value == b"record-0":
+                raise RuntimeError("bug")
+            return True
+
+        consumer = LogConsumer(2)
+        worker = self.worker(consumer, always_fails)
+        with self.assertLogs("common.kafka_transport", level="ERROR") as logs:
+            for _ in range(KafkaWorker.MAX_HANDLER_ATTEMPTS + 2):
+                worker.poll_once(0)
+        self.assertEqual(consumer.committed_offsets, [0, 1])
+        self.assertTrue(any("skipped" in line for line in logs.output))
+
+
 class KafkaWorkerTests(unittest.TestCase):
     @staticmethod
     def trusted_ca_pem() -> str:
