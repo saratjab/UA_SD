@@ -103,6 +103,24 @@ class EngineTests(unittest.TestCase):
         response = engine.handle_monitor_message({"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 99})
         self.assertEqual(response["sequence"], 99)
 
+    def test_lost_central_link_stops_watering_and_blocks_new_starts(self) -> None:
+        controller = IrrigationController("WS_001", SolenoidValve(), FlowMeter(60.0), telemetry_interval=0.01)
+        engine = WateringStationEngine(engine_config(), controller)
+        engine._monitor_ready.set()
+        self.assertTrue(engine.request_irrigation("operator-1", 5.0))
+        response = engine.handle_monitor_message(
+            {"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 1, "central_connected": False})
+        self.assertEqual(response["type"], "HEALTH_OK")
+        self.assertTrue(controller.wait_until_finished(timeout=2))
+        self.assertFalse(controller.valve.is_open)
+        self.assertEqual(controller.last_result.stopped_by, "monitor_disconnected")
+        self.assertFalse(engine.request_irrigation("operator-1", 1.0))
+
+        engine.handle_monitor_message(
+            {"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 2, "central_connected": True})
+        self.assertTrue(engine.request_irrigation("operator-1", 0.01))
+        self.assertTrue(controller.wait_until_finished(timeout=2))
+
     def test_ko_simulation_causes_health_ko(self) -> None:
         engine = WateringStationEngine(engine_config())
         engine.simulate_failure()
@@ -315,6 +333,37 @@ class IrrigationTests(unittest.TestCase):
     def test_stop_when_not_watering_returns_false(self) -> None:
         controller = IrrigationController("WS_001", SolenoidValve(), FlowMeter(60.0), telemetry_interval=0.01)
         self.assertFalse(controller.stop())
+
+    def test_failing_telemetry_callback_still_finishes_and_closes_valve(self) -> None:
+        def broker_outage(_telemetry) -> None:
+            raise RuntimeError("Kafka delivery timed out")
+
+        valve = SolenoidValve()
+        controller = IrrigationController(
+            "WS_001", valve, FlowMeter(60.0), telemetry_interval=0.01,
+            telemetry_callback=broker_outage,
+        )
+        with self.assertLogs("WM_WS.WM_WS_E.irrigation", level="ERROR"):
+            self.assertTrue(controller.start(IrrigationRequest("operator-1", 0.03)))
+            self.assertTrue(controller.wait_until_finished(timeout=2))
+        self.assertEqual(controller.state, IrrigationState.IDLE)
+        self.assertFalse(valve.is_open)
+        self.assertEqual(controller.last_result.stopped_by, "duration")
+        self.assertTrue(controller.start(IrrigationRequest("operator-1", 0.01)))
+        self.assertTrue(controller.wait_until_finished(timeout=2))
+
+    def test_failing_result_callback_still_returns_to_idle(self) -> None:
+        def failing_result(_result, _stopped_by) -> None:
+            raise RuntimeError("outbox unavailable")
+
+        controller = IrrigationController(
+            "WS_001", SolenoidValve(), FlowMeter(60.0), telemetry_interval=0.01,
+            result_callback=failing_result,
+        )
+        with self.assertLogs("WM_WS.WM_WS_E.irrigation", level="ERROR"):
+            self.assertTrue(controller.start(IrrigationRequest("operator-1", 0.01)))
+            self.assertTrue(controller.wait_until_finished(timeout=2))
+        self.assertEqual(controller.state, IrrigationState.IDLE)
 
 
 if __name__ == "__main__":

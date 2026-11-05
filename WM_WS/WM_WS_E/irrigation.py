@@ -139,38 +139,52 @@ class IrrigationController:
         return self._build_telemetry(operator_id, reading, state, final=False)
 
     def _run(self, request: IrrigationRequest) -> None:
-        stopped_by = "manual"
-        while True:
-            if self._stop_event.is_set():
-                stopped_by = self._stop_reason
-                break
-            if request.duration_seconds is not None and self.flow_meter.duration_seconds >= request.duration_seconds:
-                stopped_by = "duration"
-                break
-            if request.target_volume_liters is not None and self.flow_meter.accumulated_volume_liters >= request.target_volume_liters:
-                stopped_by = "target_volume"
-                break
-            step = self.telemetry_interval
-            if request.duration_seconds is not None:
-                step = min(step, request.duration_seconds - self.flow_meter.duration_seconds)
-            if request.target_volume_liters is not None and self.flow_meter.flow_rate_lpm > 0:
-                liters_left = request.target_volume_liters - self.flow_meter.accumulated_volume_liters
-                step = min(step, liters_left * 60.0 / self.flow_meter.flow_rate_lpm)
-            self.sleep_func(step)
-            if self._stop_event.is_set():
-                stopped_by = self._stop_reason
-                break
-            reading = self.flow_meter.advance(step)
-            telemetry = self._build_telemetry(request.operator_id, reading, IrrigationState.WATERING.value)
-            self.telemetry.append(telemetry)
-            if self.telemetry_callback:
-                self.telemetry_callback(telemetry)
-            LOGGER.info(
-                "Flow rate = %.2f L/min, accumulated volume = %.2f L",
-                telemetry.flow_rate_lpm,
-                telemetry.accumulated_volume_liters,
-            )
-        self._finish(request.operator_id, stopped_by)
+        # The finally guarantees the valve closes and the cycle ends even if an
+        # unexpected error escapes the loop; otherwise the valve would stay open.
+        stopped_by = "engine_error"
+        try:
+            while True:
+                if self._stop_event.is_set():
+                    stopped_by = self._stop_reason
+                    break
+                if request.duration_seconds is not None and self.flow_meter.duration_seconds >= request.duration_seconds:
+                    stopped_by = "duration"
+                    break
+                if request.target_volume_liters is not None and self.flow_meter.accumulated_volume_liters >= request.target_volume_liters:
+                    stopped_by = "target_volume"
+                    break
+                step = self.telemetry_interval
+                if request.duration_seconds is not None:
+                    step = min(step, request.duration_seconds - self.flow_meter.duration_seconds)
+                if request.target_volume_liters is not None and self.flow_meter.flow_rate_lpm > 0:
+                    liters_left = request.target_volume_liters - self.flow_meter.accumulated_volume_liters
+                    step = min(step, liters_left * 60.0 / self.flow_meter.flow_rate_lpm)
+                self.sleep_func(step)
+                if self._stop_event.is_set():
+                    stopped_by = self._stop_reason
+                    break
+                reading = self.flow_meter.advance(step)
+                telemetry = self._build_telemetry(request.operator_id, reading, IrrigationState.WATERING.value)
+                self.telemetry.append(telemetry)
+                self._notify_telemetry(telemetry)
+                LOGGER.info(
+                    "Flow rate = %.2f L/min, accumulated volume = %.2f L",
+                    telemetry.flow_rate_lpm,
+                    telemetry.accumulated_volume_liters,
+                )
+        except Exception:
+            LOGGER.exception("Irrigation loop failed; closing the valve")
+        finally:
+            self._finish(request.operator_id, stopped_by)
+
+    def _notify_telemetry(self, telemetry: IrrigationTelemetry) -> None:
+        """Telemetry is best-effort: a broker outage must never stop the cycle."""
+        if not self.telemetry_callback:
+            return
+        try:
+            self.telemetry_callback(telemetry)
+        except Exception:
+            LOGGER.exception("Telemetry delivery failed; irrigation continues")
 
     def _finish(self, operator_id: str, stopped_by: str) -> None:
         self.valve.close()
@@ -187,10 +201,12 @@ class IrrigationController:
                 stopped_by=stopped_by,
             )
             result = self.last_result
-        if self.telemetry_callback:
-            self.telemetry_callback(final_telemetry)
+        self._notify_telemetry(final_telemetry)
         if self.result_callback and result is not None:
-            self.result_callback(result, stopped_by)
+            try:
+                self.result_callback(result, stopped_by)
+            except Exception:
+                LOGGER.exception("Irrigation result could not be recorded")
         LOGGER.info("Irrigation stopped")
 
     def _build_telemetry(

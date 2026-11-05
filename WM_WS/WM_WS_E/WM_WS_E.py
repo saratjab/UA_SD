@@ -10,6 +10,7 @@ from .config import parse_args
 from .engine import WateringStationEngine
 from .kafka_service import EngineKafkaService
 from WM_FO.kafka_client import FieldOperator
+from common.event_panel import start_panel
 from common.kafka_transport import KafkaPublisher, KafkaUnavailable
 
 
@@ -128,9 +129,25 @@ def main(argv: list[str] | None = None) -> int:
     local_poll_thread = None
     local_operator = None
 
+    # The Monitor session runs from the start so health checks are answered
+    # while Kafka is set up. Without --ws-id (the spec's mode) the WS ID comes
+    # from WM_WS_M's HELLO_ACK, and every Kafka resource is named after it.
+    monitor_thread = threading.Thread(target=engine.run, name="wm-ws-e-monitor-session", daemon=True)
+    monitor_thread.start()
+    try:
+        ready = engine.wait_until_monitor_ready()
+    except KeyboardInterrupt:
+        ready = False
+    if not ready:
+        engine.close()
+        monitor_thread.join(timeout=3.0)
+        return 0
+    config = engine.config
+    start_panel(config.panel_host, config.panel_port, f"WM_WS_E {config.ws_id}")
+
     try:
         state_path = Path(config.state_path) if config.state_path else Path(
-            f".wm_ws_e_{config.ws_id or 'unassigned'}.sqlite3"
+            f".wm_ws_e_{config.ws_id}.sqlite3"
         )
         publisher = KafkaPublisher(f"{config.kafka_host}:{config.kafka_port}")
         kafka = EngineKafkaService(engine, publisher, state_path)
@@ -181,7 +198,13 @@ def main(argv: list[str] | None = None) -> int:
     start_command_thread(engine, local_operator, kafka)
 
     try:
-        return engine.run()
+        while monitor_thread.is_alive():
+            monitor_thread.join(timeout=0.5)
+        return 0
+    except KeyboardInterrupt:
+        engine.close()
+        monitor_thread.join(timeout=3.0)
+        return 0
     finally:
         for name, stop_event, consumer, thread in (
             ("Engine", poll_stop, worker, poll_thread),

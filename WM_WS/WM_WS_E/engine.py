@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import socket
 import threading
+import time
 
 from common import protocol
+from common.event_panel import feed
 
 from .config import EngineConfig
 from .flow_meter import FlowMeter
@@ -30,6 +32,9 @@ class WateringStationEngine:
         )
         self.failed = False
         self.blocked = False
+        # False while the Monitor reports it has lost WM_Central: the station
+        # cannot be supervised, so it must not water.
+        self.central_reachable = True
         self.monitor_socket: socket.socket | None = None
         self._monitor_ready = threading.Event()
         self._stop_event = threading.Event()
@@ -43,6 +48,17 @@ class WateringStationEngine:
     @property
     def monitor_available(self) -> bool:
         return self._monitor_ready.is_set()
+
+    def wait_until_monitor_ready(self, timeout: float | None = None) -> bool:
+        """Block until a Monitor accepted this Engine (and assigned its WS ID)."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not self._stop_event.is_set():
+            remaining = 0.2 if deadline is None else min(0.2, deadline - time.monotonic())
+            if remaining <= 0:
+                return self._monitor_ready.is_set()
+            if self._monitor_ready.wait(remaining):
+                return True
+        return False
 
     def connect_to_monitor(self) -> None:
         LOGGER.info("Connecting to WM_WS_M at %s:%s", self.config.monitor_host, self.config.monitor_port)
@@ -76,8 +92,10 @@ class WateringStationEngine:
                 return False
             self.config = EngineConfig(**{**self.config.__dict__, "ws_id": assigned_ws_id})
             self.irrigation.ws_id = assigned_ws_id
+            self.central_reachable = True
             self._monitor_ready.set()
             LOGGER.info("HELLO_ACK received")
+            feed().record("IN", "WM_WS_M", "HELLO_ACK", ws_id=assigned_ws_id, detail="Engine accepted by Monitor")
             return True
         LOGGER.error("WM_WS_M rejected Engine connection: %s", response)
         return False
@@ -112,19 +130,23 @@ class WateringStationEngine:
                 continue
             except protocol.ConnectionClosedError:
                 LOGGER.error("Monitor disconnected")
-                self._monitor_ready.clear()
-                self.irrigation.emergency_stop(reason="monitor_disconnected")
+                self._monitor_lost("Monitor closed the connection")
                 return
             except protocol.ProtocolError as exc:
                 LOGGER.error("Invalid protocol message from Monitor: %s", exc)
-                self._monitor_ready.clear()
-                self.irrigation.emergency_stop(reason="monitor_disconnected")
+                self._monitor_lost(f"invalid frame: {exc}")
                 return
             except OSError as exc:
                 LOGGER.error("Monitor connection error: %s", exc)
-                self._monitor_ready.clear()
-                self.irrigation.emergency_stop(reason="monitor_disconnected")
+                self._monitor_lost(f"connection error: {exc}")
                 return
+
+    def _monitor_lost(self, detail: str) -> None:
+        if self._monitor_ready.is_set():
+            feed().record("LOCAL", "WM_WS_M", "MONITOR_LOST", ws_id=self.config.ws_id,
+                          detail=f"{detail}; irrigation stopped")
+        self._monitor_ready.clear()
+        self.irrigation.emergency_stop(reason="monitor_disconnected")
 
     def handle_monitor_message(self, message: dict[str, object]) -> dict[str, object] | None:
         if message.get("type") != "HEALTH_CHECK":
@@ -138,6 +160,7 @@ class WateringStationEngine:
             return protocol.nack_message("invalid_sequence")
 
         LOGGER.info("HEALTH_CHECK received")
+        self._apply_central_link(message.get("central_connected", True) is not False)
         if self.failed:
             LOGGER.info("HEALTH_KO sent")
             return {
@@ -156,19 +179,36 @@ class WateringStationEngine:
             "status": "OK",
         }
 
+    def _apply_central_link(self, connected: bool) -> None:
+        if connected:
+            if not self.central_reachable:
+                LOGGER.info("WM_WS_M reports WM_Central reachable again")
+                feed().record("IN", "WM_WS_M", "CENTRAL_REACHABLE", ws_id=self.config.ws_id)
+            self.central_reachable = True
+            return
+        if self.central_reachable:
+            LOGGER.warning("WM_WS_M lost WM_Central; stopping any irrigation")
+            feed().record("IN", "WM_WS_M", "CENTRAL_UNREACHABLE", ws_id=self.config.ws_id,
+                          detail="irrigation stopped; new starts refused")
+        self.central_reachable = False
+        if self.irrigation.state is IrrigationState.WATERING:
+            self.irrigation.emergency_stop(reason="monitor_disconnected")
+
     def simulate_failure(self) -> None:
+        feed().record("LOCAL", "station menu", "SIMULATED_KO", ws_id=self.config.ws_id)
         self.failed = True
         self.irrigation.emergency_stop()
         LOGGER.warning("Simulated KO enabled")
 
     def clear_failure(self) -> None:
+        feed().record("LOCAL", "station menu", "SIMULATED_KO_CLEARED", ws_id=self.config.ws_id)
         self.failed = False
         LOGGER.info("Simulated KO cleared")
 
     def request_irrigation(self, operator_id: str, duration_seconds: float | None = None,
                            target_volume_liters: float | None = None) -> bool:
-        if not self._monitor_ready.is_set():
-            LOGGER.warning("Irrigation rejected while WM_WS_M is unavailable")
+        if not self._monitor_ready.is_set() or not self.central_reachable:
+            LOGGER.warning("Irrigation rejected while WM_WS_M or WM_Central is unavailable")
             return False
         if self.failed or self.blocked:
             LOGGER.warning("Irrigation rejected while Engine is failed")
@@ -189,8 +229,7 @@ class WateringStationEngine:
         return self.monitor_socket
 
     def _disconnect_monitor(self) -> None:
-        self._monitor_ready.clear()
-        self.irrigation.emergency_stop(reason="monitor_disconnected")
+        self._monitor_lost("session ended")
         if self.monitor_socket is not None:
             try:
                 self.monitor_socket.close()

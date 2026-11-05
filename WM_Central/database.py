@@ -1,6 +1,6 @@
 """SQLite access layer for WM_Central.
 
-Design rules (see docs/adr/ADR-001-state-model-and-schema.md):
+Design rules:
 
 * ONE sqlite3 connection shared by all threads, every operation guarded by a
   re-entrant lock. Central's database traffic is tiny (a few writes per
@@ -49,6 +49,7 @@ SCHEMA_PATH = DB_DIR / "schema.sql"
 SEED_DEV_PATH = DB_DIR / "seed_dev.sql"
 
 MAX_WS_ID_LENGTH = 64
+CENTRAL_OPERATOR_ID = "CENTRAL"
 
 _LIVE_SQL = "('AUTHORIZED', 'WATERING')"
 
@@ -123,6 +124,12 @@ class Database:
             self._migrate_requested_volume(conn)
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
             self._migrate_outbox_keys(conn)
+            # Irrigations started from CENTRAL's own controls are attributed to
+            # this operator instead of borrowing a real field operator's ID.
+            conn.execute(
+                "INSERT OR IGNORE INTO operators (operator_id, name, active) VALUES (?, ?, 1)",
+                (CENTRAL_OPERATOR_ID, "WM_Central"),
+            )
 
     @staticmethod
     def _migrate_requested_volume(conn: sqlite3.Connection) -> None:
@@ -151,13 +158,31 @@ class Database:
             )
 
     def pending_outgoing(self, limit: int = 100) -> list[tuple[str, str, str | None, dict[str, Any]]]:
-        import json
-        rows = self._all("SELECT message_id, topic, message_key, message_json FROM kafka_outbox WHERE delivered_at IS NULL ORDER BY created_at, message_id LIMIT ?", (limit,))
+        """Undelivered messages in insertion order.
+
+        ``rowid`` grows with every insert, so it preserves the order in which
+        decisions were made; timestamps (1 s precision) and random message IDs
+        do not, and Kafka only keeps per-partition order of what we send.
+        """
+        rows = self._all("SELECT message_id, topic, message_key, message_json FROM kafka_outbox WHERE delivered_at IS NULL ORDER BY rowid LIMIT ?", (limit,))
         return [(r["message_id"], r["topic"], r["message_key"], json.loads(r["message_json"])) for r in rows]
 
     def mark_outgoing_delivered(self, message_id: str) -> None:
         with self.transaction() as conn:
             conn.execute("UPDATE kafka_outbox SET delivered_at = ? WHERE message_id = ? AND delivered_at IS NULL", (self._clock(), message_id))
+
+    def prune_delivered(self, delivered_before: str) -> int:
+        """Delete delivered messages older than ``delivered_before`` (ISO-8601 UTC).
+
+        Delivered rows are only kept for a while for auditing; without pruning
+        the table grows for as long as Central runs.
+        """
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM kafka_outbox WHERE delivered_at IS NOT NULL AND delivered_at < ?",
+                (delivered_before,),
+            )
+        return cursor.rowcount
 
     def add_outgoing(self, message_id: str, topic: str, key: str | None, message: dict[str, Any]) -> None:
         with self.transaction() as conn:
@@ -402,7 +427,8 @@ class Database:
 
     def reject_authorized_irrigation(self, request_id: str, reason: DenyReason, outgoing: list[tuple[str, str, str | None, dict[str, Any]]] | None = None) -> bool:
         """Record an Engine rejection before watering as DENIED, not ENDED."""
-        if reason not in {DenyReason.ENGINE_BLOCKED, DenyReason.ENGINE_FAILED, DenyReason.MONITOR_UNAVAILABLE}:
+        if reason not in {DenyReason.ENGINE_BLOCKED, DenyReason.ENGINE_FAILED, DenyReason.MONITOR_UNAVAILABLE,
+                          DenyReason.WS_BUSY}:
             raise ValueError("reason must describe an Engine start rejection")
         with self.transaction() as conn:
             cursor = conn.execute(
@@ -412,6 +438,36 @@ class Database:
             )
             self._insert_outgoing(conn, outgoing or [])
         return cursor.rowcount == 1
+
+    def expire_stale_authorizations(
+        self,
+        older_than_s: float,
+        now: datetime,
+        outgoing_factory: Callable[[IrrigationRecord], list[tuple[str, str, str | None, dict[str, Any]]]],
+    ) -> list[IrrigationRecord]:
+        """Deny AUTHORIZED requests the Engine never started or rejected.
+
+        Without this, a lost START or a silent Engine leaves the row live, and
+        the partial unique index then denies every later request as WS_BUSY.
+        """
+        expired: list[IrrigationRecord] = []
+        with self.transaction() as conn:
+            rows = conn.execute("SELECT * FROM irrigations WHERE status = 'AUTHORIZED'").fetchall()
+            for row in rows:
+                requested = datetime.fromisoformat(row["requested_at"].replace("Z", "+00:00"))
+                if (now - requested).total_seconds() <= older_than_s:
+                    continue
+                conn.execute(
+                    "UPDATE irrigations SET status = 'DENIED', deny_reason = 'ENGINE_FAILED' "
+                    "WHERE irrigation_id = ? AND status = 'AUTHORIZED'",
+                    (row["irrigation_id"],),
+                )
+                record = _irrigation(conn.execute(
+                    "SELECT * FROM irrigations WHERE irrigation_id = ?", (row["irrigation_id"],)
+                ).fetchone())
+                self._insert_outgoing(conn, outgoing_factory(record))
+                expired.append(record)
+        return expired
 
     def end_irrigation(
         self,
@@ -460,9 +516,18 @@ class Database:
             )
         return cursor.rowcount == 1
 
-    def end_live_irrigation(self, ws_id: str, end_reason: EndReason) -> IrrigationRecord | None:
+    def end_live_irrigation(
+        self,
+        ws_id: str,
+        end_reason: EndReason,
+        outgoing_factory: Callable[[IrrigationRecord], list[tuple[str, str, str | None, dict[str, Any]]]] | None = None,
+    ) -> IrrigationRecord | None:
         """Close whatever is live on a station (used when CENTRAL itself infers
-        the end: disconnect, leak, block). Returns the closed record, if any."""
+        the end: disconnect, leak, block). Returns the closed record, if any.
+
+        ``outgoing_factory`` builds the messages that announce the end (STOP to
+        the Engine, final summary to the operator); they are stored in the same
+        transaction, so the state change and its notifications cannot diverge."""
         now = self._clock()
         with self.transaction() as conn:
             row = conn.execute(
@@ -475,10 +540,12 @@ class Database:
                 "WHERE irrigation_id = ?",
                 (end_reason.value, now, row["irrigation_id"]),
             )
-            ended = conn.execute(
+            ended = _irrigation(conn.execute(
                 "SELECT * FROM irrigations WHERE irrigation_id = ?", (row["irrigation_id"],)
-            ).fetchone()
-        return _irrigation(ended)
+            ).fetchone())
+            if outgoing_factory is not None:
+                self._insert_outgoing(conn, outgoing_factory(ended))
+        return ended
 
     def get_irrigation(self, request_id: str) -> IrrigationRecord | None:
         row = self._one("SELECT * FROM irrigations WHERE request_id = ?", (request_id,))

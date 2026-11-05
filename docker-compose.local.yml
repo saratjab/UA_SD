@@ -142,6 +142,12 @@ services:
       - "${WS1_ENGINE_PORT:-6001}"
       - --health-interval
       - "${MONITOR_HEALTH_INTERVAL:-1.0}"
+      - --panel-host
+      - 0.0.0.0
+      - --panel-port
+      - "7100"
+    ports:
+      - "127.0.0.1:${WS1_MONITOR_PANEL_PORT:-7101}:7100"
     depends_on:
       central:
         condition: service_healthy
@@ -168,6 +174,12 @@ services:
       - "/engine-state/.wm_ws_e_${WS1_ID:-WS_001}.sqlite3"
       - --local-operator-id
       - "${WS1_LOCAL_OPERATOR_ID:-OP_002}"
+      - --panel-host
+      - 0.0.0.0
+      - --panel-port
+      - "7100"
+    ports:
+      - "127.0.0.1:${WS1_ENGINE_PANEL_PORT:-7102}:7100"
     volumes:
       - ws1-engine-state:/engine-state
     depends_on:
@@ -194,6 +206,12 @@ services:
       - "${WS2_ENGINE_PORT:-6002}"
       - --health-interval
       - "${MONITOR_HEALTH_INTERVAL:-1.0}"
+      - --panel-host
+      - 0.0.0.0
+      - --panel-port
+      - "7100"
+    ports:
+      - "127.0.0.1:${WS2_MONITOR_PANEL_PORT:-7103}:7100"
     depends_on:
       central:
         condition: service_healthy
@@ -220,6 +238,12 @@ services:
       - "/engine-state/.wm_ws_e_${WS2_ID:-WS_002}.sqlite3"
       - --local-operator-id
       - "${WS2_LOCAL_OPERATOR_ID:-OP_003}"
+      - --panel-host
+      - 0.0.0.0
+      - --panel-port
+      - "7100"
+    ports:
+      - "127.0.0.1:${WS2_ENGINE_PANEL_PORT:-7104}:7100"
     volumes:
       - ws2-engine-state:/engine-state
     depends_on:
@@ -237,6 +261,12 @@ services:
       - "${KAFKA_PORT:-29092}"
       - --operator-id
       - "${FO_OPERATOR_ID:-OP_001}"
+      - --panel-host
+      - 0.0.0.0
+      - --panel-port
+      - "7100"
+    ports:
+      - "127.0.0.1:${FO_PANEL_PORT:-7201}:7100"
 volumes:
   central-data:
   kafka-data:

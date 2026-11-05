@@ -32,6 +32,8 @@ COMMAND_REJECTION_REASONS = frozenset({
     "ENGINE_BLOCKED",
     "ENGINE_FAILED",
     "MONITOR_UNAVAILABLE",
+    "ENGINE_BUSY",
+    "COMMAND_EXPIRED",
 })
 
 REQUIRED = ("event_type", "message_id", "timestamp", "payload")
@@ -75,7 +77,7 @@ def validate(message: object, *, required_ids: tuple[str, ...] = ()) -> None:
     for field in ("event_type", "message_id", "timestamp") + required_ids:
         if not isinstance(message.get(field), str) or not message[field].strip():
             raise MessageValidationError(f"missing or invalid {field}")
-    if not isinstance(message["payload"], dict):
+    if not isinstance(message.get("payload"), dict):
         raise MessageValidationError("payload must be an object")
     try:
         datetime.fromisoformat(message["timestamp"].replace("Z", "+00:00"))

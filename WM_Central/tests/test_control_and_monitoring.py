@@ -22,6 +22,10 @@ class Publisher:
     def publish(self, topic: str, message: dict, *, key: str | None = None) -> None:
         self.records.append((topic, message))
 
+    def publish_nowait(self, topic: str, message: dict, *, key: str | None = None) -> bool:
+        self.records.append((topic, message))
+        return True
+
 
 class ControlAndMonitoringTests(DatabaseTestCase):
     def setUp(self) -> None:
@@ -58,6 +62,14 @@ class ControlAndMonitoringTests(DatabaseTestCase):
         self.assertEqual(command["payload"], {"duration_seconds": 8})
         self.assertTrue(command["request_id"])
         self.assertEqual(command["operator_id"], "OP_001")
+
+    def test_central_started_irrigation_is_attributed_to_central_not_a_field_operator(self) -> None:
+        self.assertTrue(self.db.get_operator("CENTRAL").active)
+        execute_control_line("START WS_001 8", self.state, self.service, self.log)
+        execute_menu_choice("2", self.state, self.service, self.log,
+                            input_fn=lambda _prompt, answers=iter(["WS_002", "5"]): next(answers))
+        commands = [m for topic, m in self.publisher.records if topic == WS_COMMANDS]
+        self.assertEqual([m["operator_id"] for m in commands], ["CENTRAL", "CENTRAL"])
 
     def test_start_all_records_normal_denials_for_disconnected_stations(self) -> None:
         self.state.disconnect("WS_002", self.state._connections["WS_002"])

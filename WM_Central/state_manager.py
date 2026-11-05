@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 
 from .database import Database
 from .models import (
@@ -88,6 +89,7 @@ class StateManager:
         self._lock = threading.RLock()
         self._connections: dict[str, Any] = {}
         self._telemetry: dict[str, tuple[float | None, float | None]] = {}
+        self._termination_outgoing: Any = None
 
         for irrigation in self._db.list_irrigations():
             if irrigation.total_volume_l is not None:
@@ -96,15 +98,33 @@ class StateManager:
                     irrigation.total_volume_l,
                 )
 
+    def set_termination_outgoing(self, factory: Any) -> None:
+        """Install the builder for messages sent when CENTRAL itself ends an
+        irrigation (STOP to the Engine, final summary to the operator)."""
+        with self._lock:
+            self._termination_outgoing = factory
+
+    @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Hold the state lock across a check-then-act sequence (e.g. authorize)."""
+        with self._lock:
+            yield
+
     def register(self, ws_id: str, location: str | None, connection: Any) -> RegisterOutcome:
         ws_id = ws_id.strip()
         with self._lock:
+            previous = self._connections.get(ws_id)
+            if previous is not None and previous is not connection:
+                # Without station credentials a newcomer cannot prove it is the
+                # real station, so the live session wins. A dead peer frees the
+                # ID once TCP keepalive closes its socket (about 25 s).
+                LOGGER.warning("WS %s is already connected; rejecting a second registration", ws_id)
+                return RegisterOutcome(False, "already_connected")
             result = self._db.register_station(ws_id, location)
             if not result.ok:
                 return RegisterOutcome(False, result.reason)
-            previous = self._connections.get(ws_id)
             self._connections[ws_id] = connection
-            replaced = previous if previous is not connection else None
+            replaced = None
         LOGGER.info(
             "WS %s %s (%s)",
             ws_id,
@@ -127,7 +147,7 @@ class StateManager:
                 return DisconnectOutcome(False)
             del self._connections[ws_id]
             self._db.touch_last_seen(ws_id)
-            ended = self._db.end_live_irrigation(ws_id, EndReason.DISCONNECTED)
+            ended = self._db.end_live_irrigation(ws_id, EndReason.DISCONNECTED, self._termination_outgoing)
         LOGGER.warning("WS %s DISCONNECTED", ws_id)
         return DisconnectOutcome(True, ended.request_id if ended else None)
 
@@ -155,7 +175,7 @@ class StateManager:
             if self._connections.get(ws_id) is not connection:
                 return FaultOutcome(False, "not_registered")
             is_new = self._db.open_fault(ws_id, fault_type, details, detected_at)
-            ended = self._db.end_live_irrigation(ws_id, EndReason.LEAK)
+            ended = self._db.end_live_irrigation(ws_id, EndReason.LEAK, self._termination_outgoing)
         LOGGER.error("WS %s LEAK (%s): %s%s", ws_id, fault_type, details, "" if is_new else " [repeat]")
         return FaultOutcome(True, None, is_new, ended.request_id if ended else None)
 
@@ -175,7 +195,7 @@ class StateManager:
         with self._lock:
             if not self._db.set_admin_state(ws_id, AdminState.BLOCKED, outgoing):
                 return CommandOutcome(False)
-            ended = self._db.end_live_irrigation(ws_id, EndReason.BLOCKED)
+            ended = self._db.end_live_irrigation(ws_id, EndReason.BLOCKED, self._termination_outgoing)
         LOGGER.info("WS %s BLOCKED", ws_id)
         return CommandOutcome(True, ended.request_id if ended else None)
 

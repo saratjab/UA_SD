@@ -8,6 +8,7 @@ import threading
 import time
 
 from common import protocol
+from common.event_panel import feed
 from .central_client import CentralClient
 from .config import MonitorConfig
 from .ws_e_server import EngineServer
@@ -37,6 +38,9 @@ class WateringStationMonitor:
             if not self._ensure_central_registration():
                 return 1
 
+            # While no Engine is connected, keep the Central session alive so
+            # Central shows the station's fault instead of DISCONNECTED.
+            self.engine_server.on_idle = self._ensure_central_registration
             self.engine_server.start()
             while True:
                 try:
@@ -87,9 +91,9 @@ class WateringStationMonitor:
             time.sleep(self.config.health_interval)
 
     def perform_health_check(self, engine_socket: socket.socket, sequence: int) -> bool:
-        self._ensure_central_registration()
+        central_connected = self._ensure_central_registration()
         self._last_health_connection_usable = False
-        message = protocol.health_check_message(self.config.ws_id, sequence)
+        message = protocol.health_check_message(self.config.ws_id, sequence, central_connected)
         try:
             protocol.send_message(engine_socket, message)
             engine_socket.settimeout(self.config.health_timeout)
@@ -133,6 +137,7 @@ class WateringStationMonitor:
     def activate_fault(self, fault: str, details: str) -> bool:
         if self._fault_active:
             return True
+        feed().record("LOCAL", "WM_WS_E", f"ENGINE_{fault.upper()}", ws_id=self.config.ws_id, detail=details)
         reported = self.report_fault(fault, details)
         if reported:
             self._fault_active = True
@@ -154,6 +159,7 @@ class WateringStationMonitor:
         if resolved:
             self._fault_active = False
             self._fault_sync_needed = False
+            feed().record("LOCAL", "WM_WS_E", "ENGINE_HEALTHY", ws_id=self.config.ws_id)
 
         return resolved
 

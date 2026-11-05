@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from common.kafka_contract import (ACTIVATION_REQUESTS, OPERATOR_EVENTS,
                                    MessageValidationError, decode, envelope)
+from common.event_panel import describe, feed
 from common.kafka_transport import KafkaPublisher, KafkaWorker
 
 from .display import show_event
@@ -61,6 +62,8 @@ class FieldOperator:
             with self._lock:
                 self._pending.pop(request_id, None)
             raise
+        feed().record("OUT", "WM_Central", "ACTIVATION_REQUEST", ws_id=ws_id, request_id=request_id,
+                      detail=describe(payload) or "manual mode")
         mode = (f"{duration_seconds} seconds" if duration_seconds is not None else
                 f"{target_volume_liters:g} litres" if target_volume_liters is not None else "manual mode")
         print(f"[{ws_id}] Request {request_id} submitted ({mode}).", flush=True)
@@ -76,6 +79,7 @@ class FieldOperator:
                            operator_id=self.operator_id, request_id=request_id)
         try:
             self.publisher.publish(ACTIVATION_REQUESTS, message, key=self.operator_id)
+            feed().record("OUT", "WM_Central", "AVAILABLE_STATIONS_REQUEST", request_id=request_id)
             if not completed.wait(timeout):
                 raise TimeoutError("Central did not return the available station list in time")
             with self._lock:
@@ -132,6 +136,9 @@ class FieldOperator:
                 if discovery is not None:
                     self._station_discoveries[request_id] = (discovery[0], message)
                     discovery[0].set()
+            if discovery is not None:
+                feed().record("IN", "WM_Central", event_type, request_id=request_id,
+                              detail=describe(message["payload"]))
             return True
         if self.station_id is not None and message.get("ws_id") != self.station_id:
             return True
@@ -147,6 +154,8 @@ class FieldOperator:
                 self._shown_terminal_request_ids.add(request_id)
         if waiter is None and not recoverable:
             return True
+        feed().record("IN", "WM_Central", event_type, ws_id=message.get("ws_id"), request_id=request_id,
+                      detail=describe(message["payload"]))
         show_event(message)
         if waiter is not None and is_terminal:
             with self._lock:

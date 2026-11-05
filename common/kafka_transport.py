@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import ssl
+import threading
 import time
 from collections.abc import Mapping
 from typing import Any, Callable
@@ -111,7 +112,8 @@ class KafkaPublisher:
             })
         self._producer = producer
 
-    def publish(self, topic: str, message: dict[str, Any], *, key: str | None = None) -> None:
+    @staticmethod
+    def _partition_key(topic: str, message: dict[str, Any], key: str | None) -> str | None:
         if topic in TOPIC_KEYS:
             expected_key = message_key(topic, message)
             if expected_key is None:
@@ -119,6 +121,29 @@ class KafkaPublisher:
             if key is not None and key != expected_key:
                 raise ValueError(f"{topic} partition key must match {TOPIC_KEYS[topic]}")
             key = expected_key
+        return key
+
+    def publish_nowait(self, topic: str, message: dict[str, Any], *, key: str | None = None) -> bool:
+        """Best-effort send for replaceable data such as telemetry.
+
+        Never blocks on the broker and never raises for delivery problems: a
+        lost progress sample is superseded by the next one, while a blocked
+        caller (the irrigation loop) would be a real fault.
+        """
+        key = self._partition_key(topic, message, key)
+        def report(err: Any, _msg: Any) -> None:
+            if err:
+                LOGGER.warning("Best-effort Kafka delivery failed topic=%s: %s", topic, err)
+        try:
+            self._producer.produce(topic, encode(message), key=key, on_delivery=report)
+            self._producer.poll(0)
+            return True
+        except (BufferError, KafkaException) as exc:
+            LOGGER.warning("Best-effort Kafka send dropped topic=%s: %s", topic, exc)
+            return False
+
+    def publish(self, topic: str, message: dict[str, Any], *, key: str | None = None) -> None:
+        key = self._partition_key(topic, message, key)
         delivered: list[Exception] = []
         def report(err: Any, _msg: Any) -> None:
             if err:
@@ -135,7 +160,17 @@ class KafkaPublisher:
 
 
 class KafkaWorker:
-    """Manual-commit polling loop. Handler success is the commit boundary."""
+    """Manual-commit polling loop. Handler success is the commit boundary.
+
+    Committing offset N also commits everything before it, so a failed record
+    must be retried *before* later records are processed: on failure the
+    consumer seeks back to it. A record that keeps failing (a bug, not a
+    transient outage) is skipped after MAX_HANDLER_ATTEMPTS so it cannot
+    block its partition forever; the skip is logged as an error.
+    """
+
+    MAX_HANDLER_ATTEMPTS = 5
+    MAX_RETRY_DELAY_SECONDS = 5.0
     def __init__(self, bootstrap_servers: str, group_id: str, topics: list[str], handler: Callable[[bytes], bool], consumer: Any | None = None, *, auto_offset_reset: str = "earliest", group_instance_id: str | None = None) -> None:
         if consumer is None:
             if Consumer is None:
@@ -151,6 +186,11 @@ class KafkaWorker:
         self._auto_offset_reset = auto_offset_reset
         self._running = False
         self._assignment_logged = False
+        self._failed_attempts: dict[tuple[Any, Any, Any], int] = {}
+        self._closing = threading.Event()
+
+    def _backoff(self, attempt: int) -> None:
+        self._closing.wait(min(0.5 * 2 ** (attempt - 1), self.MAX_RETRY_DELAY_SECONDS))
 
     def start(self) -> None:
         self._consumer.subscribe(self._topics)
@@ -228,12 +268,31 @@ class KafkaWorker:
         try:
             handled = self._handler(msg.value())
         except Exception:
-            LOGGER.exception("Kafka message processing failed; offset not committed")
-            return False
+            LOGGER.exception("Kafka message processing failed")
+            handled = False
+        position = (msg.topic(), msg.partition(), msg.offset())
         if handled:
+            self._failed_attempts.pop(position, None)
             self._consumer.commit(message=msg, asynchronous=False)
-        return handled
+            return True
+
+        attempts = self._failed_attempts.get(position, 0) + 1
+        if attempts >= self.MAX_HANDLER_ATTEMPTS:
+            self._failed_attempts.pop(position, None)
+            LOGGER.error(
+                "Kafka record skipped after %d failed attempts group=%s topic=%s partition=%s offset=%s",
+                attempts, self._group_id, *position,
+            )
+            self._consumer.commit(message=msg, asynchronous=False)
+            return False
+        self._failed_attempts[position] = attempts
+        LOGGER.warning("Retrying Kafka record attempt=%d topic=%s partition=%s offset=%s",
+                       attempts + 1, *position)
+        self._consumer.seek(TopicPartition(*position))
+        self._backoff(attempts)
+        return False
 
     def close(self) -> None:
         self._running = False
+        self._closing.set()
         self._consumer.close()

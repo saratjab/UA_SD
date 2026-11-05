@@ -259,5 +259,36 @@ class IrrigationTests(DatabaseTestCase):
         self.assertEqual(results.count(IrrigationStatus.DENIED), 7)
 
 
+class OutboxTests(DatabaseTestCase):
+    def test_prune_removes_only_old_delivered_messages(self) -> None:
+        for message_id in ("old-delivered", "new-delivered", "pending"):
+            self.db.add_outgoing(message_id, "wm.ws.commands", "WS_001", {"message_id": message_id})
+        with self.db.transaction() as conn:
+            conn.execute("UPDATE kafka_outbox SET delivered_at = '2026-10-01T00:00:00Z' WHERE message_id = 'old-delivered'")
+            conn.execute("UPDATE kafka_outbox SET delivered_at = '2026-10-05T09:00:00Z' WHERE message_id = 'new-delivered'")
+            conn.execute("UPDATE kafka_outbox SET created_at = '2026-09-01T00:00:00Z' WHERE message_id = 'pending'")
+        self.assertEqual(self.db.prune_delivered("2026-10-04T00:00:00Z"), 1)
+        remaining = {row[0] for row in self.db._all("SELECT message_id FROM kafka_outbox")}
+        self.assertEqual(remaining, {"new-delivered", "pending"})
+
+    def test_pending_lookup_uses_partial_index(self) -> None:
+        plan = " ".join(row[3] for row in self.db._all(
+            "EXPLAIN QUERY PLAN SELECT message_id FROM kafka_outbox WHERE delivered_at IS NULL ORDER BY rowid"))
+        self.assertIn("ix_outbox_pending", plan)
+
+    def test_pending_messages_keep_insertion_order_within_the_same_second(self) -> None:
+        """Random message IDs must never reorder BLOCK/ACTIVATE for one station."""
+        import uuid
+
+        expected = []
+        for index in range(20):
+            event_type = "BLOCK_WS" if index % 2 == 0 else "ACTIVATE_WS"
+            message_id = str(uuid.uuid4())
+            message = {"event_type": event_type, "message_id": message_id, "ws_id": "WS_001"}
+            self.db.add_outgoing(message_id, "wm.ws.commands", "WS_001", message)
+            expected.append(message_id)
+        self.assertEqual([row[0] for row in self.db.pending_outgoing()], expected)
+
+
 if __name__ == "__main__":
     unittest.main()

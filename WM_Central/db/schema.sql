@@ -13,6 +13,11 @@ CREATE TABLE IF NOT EXISTS kafka_outbox (
     delivered_at TEXT
 );
 
+-- The flush loop reads undelivered rows (delivered_at IS NULL) every second
+-- and pruning deletes by delivered_at. Equal keys are stored in rowid order,
+-- so "ORDER BY rowid" needs no extra sort.
+CREATE INDEX IF NOT EXISTS ix_outbox_pending ON kafka_outbox (delivered_at);
+
 CREATE TABLE IF NOT EXISTS watering_stations (
     ws_id         TEXT PRIMARY KEY CHECK (length(trim(ws_id)) > 0),
     location      TEXT NOT NULL    CHECK (length(trim(location)) > 0),
