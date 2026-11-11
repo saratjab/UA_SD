@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WM Central Console</title>
+<link rel="stylesheet" href="static/console.css">
+<script type="application/json" id="config">__CONFIG__</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark" id="brand-mark"></div>
+    <div>
+      <h1>WM_Central</h1>
+      <div class="sub">Central control &amp; monitoring</div>
+    </div>
+  </div>
+  <div class="grow"></div>
+  <span id="live" class="live">Connecting</span>
+  <button class="btn ghost sm" id="sign-out" hidden>Sign out</button>
+</header>
+
+<!-- Sign in -->
+<section id="login" class="page" hidden>
+  <div class="card login">
+    <form id="login-form" class="stack">
+      <div>
+        <h2 style="font-size:18px">Sign in to Central</h2>
+        <p class="muted" style="margin:6px 0 0">Enter the admin token configured as <span class="mono">CENTRAL_ADMIN_TOKEN</span>. It is kept only for this browser tab.</p>
+      </div>
+      <label class="field">Admin token
+        <input type="password" id="token-input" autocomplete="current-password" required>
+      </label>
+      <div class="error-text" id="login-error"></div>
+      <button class="btn primary block" type="submit">Open console</button>
+    </form>
+  </div>
+</section>
+
+<!-- Console -->
+<div id="app" class="page" hidden>
+  <div class="layout">
+    <aside class="card menu" aria-label="Central controls">
+      <div class="menu-title">Control menu</div>
+      <button class="menu-item" data-menu="1"><span class="num">1</span>Display station status</button>
+      <hr>
+      <button class="menu-item okish" data-menu="2"><span class="num">2</span>Start irrigation for one station</button>
+      <button class="menu-item okish" data-menu="3"><span class="num">3</span>Start irrigation on all eligible stations</button>
+      <hr>
+      <button class="menu-item warn" data-menu="4"><span class="num">4</span>Block one station</button>
+      <button class="menu-item warn" data-menu="5"><span class="num">5</span>Block all stations</button>
+      <hr>
+      <button class="menu-item" data-menu="6"><span class="num">6</span>Activate one station</button>
+      <button class="menu-item" data-menu="7"><span class="num">7</span>Activate all stations</button>
+      <hr>
+      <button class="menu-item danger" data-menu="8"><span class="num">8</span>Stop irrigation on one station</button>
+      <button class="menu-item danger" data-menu="9"><span class="num">9</span>Stop all active irrigations</button>
+    </aside>
+
+    <main class="stack" style="gap:24px">
+      <div class="stats" id="stats"></div>
+
+      <section class="section" id="stations-section">
+        <div class="section-head">
+          <h2>Stations</h2><span class="count" id="station-count">0</span>
+          <div class="grow"></div>
+          <input type="search" id="station-filter" placeholder="Filter stations" aria-label="Filter stations">
+        </div>
+        <div class="grid" id="stations"></div>
+      </section>
+
+      <section class="section" id="live-section">
+        <div class="section-head">
+          <h2>Live irrigations</h2><span class="count" id="live-count">0</span>
+        </div>
+        <div class="grid-2" id="live-list"></div>
+      </section>
+
+      <section class="section" id="history-section">
+        <div class="section-head"><h2>Recent irrigations</h2><span class="muted" style="font-size:12px">last 50 finished or denied requests</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Requested</th><th>Station</th><th>Operator</th><th>Mode</th><th>Result</th><th>Reason</th><th class="num">Duration</th><th class="num">Volume</th><th>Request</th></tr></thead>
+            <tbody id="history"></tbody>
+          </table>
+          <div id="history-empty" class="empty" style="border:0;border-radius:0">No finished irrigations yet.</div>
+        </div>
+      </section>
+
+      <section class="section" id="events-section">
+        <details class="collapsible" open>
+          <summary class="section-head"><span class="chev">&#9656;</span><h2>Live events</h2><span class="muted" style="font-size:12px">messages Central exchanges with Field Operators and stations</span></summary>
+          <div class="row" style="margin:10px 0"><input type="search" id="event-filter" placeholder="Filter by station, request or event" aria-label="Filter events"></div>
+          <div class="table-wrap feed-wrap">
+            <table class="feed">
+              <thead><tr><th>Time</th><th>Dir</th><th>Peer</th><th>Event</th><th>Station</th><th>Request</th><th>Detail</th></tr></thead>
+              <tbody id="event-rows"></tbody>
+            </table>
+            <div id="event-empty" class="empty" style="border:0;border-radius:0">Waiting for events…</div>
+          </div>
+        </details>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- Start irrigation -->
+<dialog id="start-dialog">
+  <form method="dialog" id="start-form">
+    <h2 id="start-title">Start irrigation</h2>
+    <p class="lead" id="start-lead"></p>
+    <label class="field" id="start-station-field">Station
+      <select id="start-station" required></select>
+    </label>
+    <div class="field" style="display:flex;flex-direction:column;gap:6px">
+      <span style="font-weight:550;font-size:13px">Irrigate by</span>
+      <div class="segmented" id="start-mode">
+        <button type="button" data-value="duration" aria-pressed="true">Duration</button>
+        <button type="button" data-value="volume" aria-pressed="false">Target volume</button>
+        <button type="button" data-value="manual" aria-pressed="false">Until stopped</button>
+      </div>
+    </div>
+    <label class="field" id="start-amount-field"><span id="start-amount-label">Duration (seconds)</span>
+      <input type="number" id="start-amount" min="1" step="1" value="60">
+      <div class="presets" id="start-presets"></div>
+    </label>
+    <label class="field">Operator
+      <select id="start-operator"></select>
+      <span class="hint">Central starts irrigations as CENTRAL unless you pick a registered operator.</span>
+    </label>
+    <div class="error-text" id="start-error"></div>
+    <div class="actions">
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" id="start-submit" value="ok">Start irrigation</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- One-station action (block / activate / stop) -->
+<dialog id="station-dialog">
+  <form method="dialog" id="station-form">
+    <h2 id="station-title"></h2>
+    <p class="lead" id="station-lead"></p>
+    <label class="field">Station
+      <select id="station-select" required></select>
+    </label>
+    <div class="error-text" id="station-error"></div>
+    <div class="actions">
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" id="station-submit" value="ok"></button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Results -->
+<dialog id="result-dialog">
+  <form method="dialog">
+    <h2 id="result-title">Result</h2>
+    <div class="result-list" id="result-list"></div>
+    <div class="actions"><button class="btn primary" value="ok">Done</button></div>
+  </form>
+</dialog>
+
+<script src="static/console.js"></script>
+<script src="static/central.js"></script>
+</body>
+</html>

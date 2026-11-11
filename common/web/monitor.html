@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WM Station Monitor</title>
+<link rel="stylesheet" href="static/console.css">
+<script type="application/json" id="config">__CONFIG__</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark" id="brand-mark"></div>
+    <div>
+      <h1>Station Monitor</h1>
+      <div class="sub" id="station-sub"></div>
+    </div>
+  </div>
+  <div class="grow"></div>
+  <span id="live" class="live">Connecting</span>
+</header>
+
+<div class="page">
+  <div class="stack" id="banners"></div>
+
+  <section class="card">
+    <div class="section-head" style="margin-bottom:22px"><h2>Component links</h2><span class="muted" style="font-size:12px">the Monitor supervises the Engine and reports to Central</span></div>
+    <div class="chain" id="chain"></div>
+  </section>
+
+  <div class="grid-2" style="align-items:start">
+    <section class="card stack">
+      <div class="row"><h2>Engine health checks</h2><div class="grow"></div><span id="health-chip"></span></div>
+      <div class="row" style="gap:14px">
+        <div class="heartbeat" id="heartbeat" aria-label="Recent health checks"></div>
+        <span class="muted" id="health-sub" style="font-size:12.5px"></span>
+      </div>
+      <dl class="kv" id="health-kv"></dl>
+      <div id="fault"></div>
+    </section>
+
+    <section class="card stack">
+      <div class="row"><h2>Central registration</h2><div class="grow"></div><span id="central-chip"></span></div>
+      <dl class="kv" id="central-kv"></dl>
+      <p class="muted" style="margin:0;font-size:12.5px">Every health check tells the Engine whether Central is reachable. While it is not, the Engine halts irrigation and refuses new starts.</p>
+    </section>
+  </div>
+
+  <section class="section">
+    <details class="collapsible" open>
+      <summary class="section-head"><span class="chev">&#9656;</span><h2>Live events</h2><span class="muted" style="font-size:12px">registration, fault reports and Engine sessions</span></summary>
+      <div class="row" style="margin:10px 0"><input type="search" id="event-filter" placeholder="Filter events" aria-label="Filter events"></div>
+      <div class="table-wrap feed-wrap">
+        <table class="feed">
+          <thead><tr><th>Time</th><th>Dir</th><th>Peer</th><th>Event</th><th>Station</th><th>Request</th><th>Detail</th></tr></thead>
+          <tbody id="event-rows"></tbody>
+        </table>
+        <div id="event-empty" class="empty" style="border:0;border-radius:0">Waiting for events…</div>
+      </div>
+    </details>
+  </section>
+</div>
+
+<script src="static/console.js"></script>
+<script src="static/monitor.js"></script>
+</body>
+</html>

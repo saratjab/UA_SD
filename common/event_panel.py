@@ -34,6 +34,15 @@ class EventFeed:
         self._events: deque[dict[str, Any]] = deque(maxlen=capacity)
         self._seq = 0
         self._lock = threading.Lock()
+        # Wakes live streams the moment an event is recorded.
+        self._changed = threading.Condition(self._lock)
+
+    def wait_for_new(self, after: int, timeout: float) -> bool:
+        """Block until an event newer than ``after`` exists, or ``timeout`` passes."""
+        with self._changed:
+            if self._seq <= after:
+                self._changed.wait(timeout)
+            return self._seq > after
 
     def record(self, direction: str, peer: str, event: str, *, ws_id: str | None = None,
                request_id: str | None = None, detail: Any = "") -> dict[str, Any]:
@@ -51,6 +60,7 @@ class EventFeed:
                 "detail": str(detail) if detail is not None else "",
             }
             self._events.append(item)
+            self._changed.notify_all()
             return item
 
     def since(self, after: int, limit: int = MAX_EVENTS_PER_RESPONSE) -> tuple[list[dict[str, Any]], int]:

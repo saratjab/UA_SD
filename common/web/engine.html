@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WM Station Engine</title>
+<link rel="stylesheet" href="static/console.css">
+<script type="application/json" id="config">__CONFIG__</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark" id="brand-mark"></div>
+    <div>
+      <h1>Station Engine</h1>
+      <div class="sub" id="station-sub"></div>
+    </div>
+  </div>
+  <div class="grow"></div>
+  <span id="live" class="live">Connecting</span>
+</header>
+
+<div class="page">
+  <div class="stack" id="banners"></div>
+
+  <section class="card">
+    <div class="section-head" style="margin-bottom:22px"><h2>Component links</h2><span class="muted" style="font-size:12px">as this Engine sees them</span></div>
+    <div class="chain" id="chain"></div>
+  </section>
+
+  <div class="grid-2" style="align-items:start">
+    <section class="card">
+      <div class="hero">
+        <div class="valve" id="valve"><span class="drop"></span><span class="drop"></span><span class="drop"></span></div>
+        <div class="grow">
+          <div class="muted" style="font-size:12px">Irrigation</div>
+          <div class="big" id="state-text">—</div>
+          <div class="muted" id="state-sub"></div>
+        </div>
+        <div id="state-chip"></div>
+      </div>
+      <div id="irrigation"></div>
+    </section>
+
+    <section class="card stack">
+      <h2>Station controls</h2>
+      <div class="stack" style="gap:8px">
+        <div class="row">
+          <button class="btn primary" id="btn-start">Start manual irrigation</button>
+          <button class="btn danger" id="btn-stop">Stop irrigation</button>
+        </div>
+        <div class="muted" id="local-hint" style="font-size:12.5px"></div>
+      </div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:0">
+      <div class="stack" style="gap:8px">
+        <div class="row">
+          <button class="btn warn" id="btn-fail">Simulate failure (KO)</button>
+          <button class="btn okish" id="btn-clear">Clear failure</button>
+        </div>
+        <div class="muted" style="font-size:12.5px">A simulated failure makes the Engine answer KO to the Monitor's health checks; the Monitor reports the fault to Central and any irrigation stops.</div>
+      </div>
+      <div id="last-completed"></div>
+    </section>
+  </div>
+
+  <section class="section">
+    <details class="collapsible" open>
+      <summary class="section-head"><span class="chev">&#9656;</span><h2>Live events</h2><span class="muted" style="font-size:12px">commands from Central, events to Central, Monitor session</span></summary>
+      <div class="row" style="margin:10px 0"><input type="search" id="event-filter" placeholder="Filter by request or event" aria-label="Filter events"></div>
+      <div class="table-wrap feed-wrap">
+        <table class="feed">
+          <thead><tr><th>Time</th><th>Dir</th><th>Peer</th><th>Event</th><th>Station</th><th>Request</th><th>Detail</th></tr></thead>
+          <tbody id="event-rows"></tbody>
+        </table>
+        <div id="event-empty" class="empty" style="border:0;border-radius:0">Waiting for events…</div>
+      </div>
+    </details>
+  </section>
+</div>
+
+<script src="static/console.js"></script>
+<script src="static/engine.js"></script>
+</body>
+</html>
