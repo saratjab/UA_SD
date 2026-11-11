@@ -31,6 +31,14 @@ class WateringStationMonitor:
         self._fault_active = False
         self._fault_sync_needed = True
         self._last_health_connection_usable = False
+        # What this Monitor knows about its two peers, for its web console.
+        self._status_lock = threading.Lock()
+        self._last_fault: tuple[str, str] | None = None
+        self._status: dict = {
+            "engine": {"connected": False, "since": None},
+            "central": {"connected": None, "checked_at": None},
+            "health": [],
+        }
 
     def run(self) -> int:
         LOGGER.info("Starting WM_WS_M for WS ID %s", self.config.ws_id)
@@ -83,12 +91,56 @@ class WateringStationMonitor:
         return result
 
     def monitor_engine(self, engine_socket: socket.socket) -> None:
-        while True:
-            self.sequence += 1
-            if not self.perform_health_check(engine_socket, self.sequence):
-                if not self._last_health_connection_usable:
-                    return
-            time.sleep(self.config.health_interval)
+        self._set_engine_connected(True)
+        try:
+            while True:
+                self.sequence += 1
+                self._last_fault = None
+                ok = self.perform_health_check(engine_socket, self.sequence)
+                self._record_health(self.sequence, ok)
+                if not ok:
+                    if not self._last_health_connection_usable:
+                        return
+                time.sleep(self.config.health_interval)
+        finally:
+            self._set_engine_connected(False)
+
+    # ----- status for the web console -----
+
+    def _set_engine_connected(self, connected: bool) -> None:
+        with self._status_lock:
+            self._status["engine"] = {"connected": connected, "since": utc_timestamp()}
+
+    def _record_central(self, connected: bool) -> None:
+        with self._status_lock:
+            self._status["central"] = {"connected": connected, "checked_at": utc_timestamp()}
+
+    def _record_health(self, sequence: int, ok: bool) -> None:
+        fault = self._last_fault
+        entry = {"sequence": sequence, "ok": ok, "time": utc_timestamp(),
+                 "fault": fault[0] if fault and not ok else None,
+                 "detail": fault[1] if fault and not ok else None}
+        with self._status_lock:
+            self._status["health"] = (self._status["health"] + [entry])[-30:]
+
+    def status(self) -> dict:
+        with self._status_lock:
+            snapshot = {key: (list(value) if isinstance(value, list) else dict(value))
+                        for key, value in self._status.items()}
+        last = snapshot["health"][-1] if snapshot["health"] else None
+        return {
+            "ws_id": self.config.ws_id,
+            "location": self.config.location,
+            "central_address": f"{self.config.central_host}:{self.config.central_port}",
+            "engine_port": self.config.engine_port,
+            "health_interval": self.config.health_interval,
+            "health_timeout": self.config.health_timeout,
+            "engine": snapshot["engine"],
+            "central": snapshot["central"],
+            "fault_active": self._fault_active,
+            "last_health": last,
+            "health": snapshot["health"],
+        }
 
     def perform_health_check(self, engine_socket: socket.socket, sequence: int) -> bool:
         central_connected = self._ensure_central_registration()
@@ -135,6 +187,7 @@ class WateringStationMonitor:
         return False
 
     def activate_fault(self, fault: str, details: str) -> bool:
+        self._last_fault = (fault, details)
         if self._fault_active:
             return True
         feed().record("LOCAL", "WM_WS_E", f"ENGINE_{fault.upper()}", ws_id=self.config.ws_id, detail=details)
@@ -172,6 +225,11 @@ class WateringStationMonitor:
 
     def _ensure_central_registration(self) -> bool:
         """Keep one registration per live Central session and reconnect if lost."""
+        connected = self._check_central_registration()
+        self._record_central(connected)
+        return connected
+
+    def _check_central_registration(self) -> bool:
         try:
             return self.central_client.check_connection()
         except (OSError, protocol.ProtocolError, RuntimeError) as exc:

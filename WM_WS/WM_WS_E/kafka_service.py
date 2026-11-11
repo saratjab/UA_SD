@@ -41,6 +41,8 @@ class EngineKafkaService:
         self._sequence = 0
         self._end_reason = "MANUAL_STOP"
         self._pending_local_stops: set[str] = set()
+        # The last irrigation this Engine finished, for its web console.
+        self.last_completed: dict[str, Any] | None = None
         self._lock = threading.RLock()
         self._retry_stop = threading.Event()
         if str(state_path) != ":memory:":
@@ -183,6 +185,20 @@ class EngineKafkaService:
         with self._lock:
             return self._request_id
 
+    def active_request(self) -> dict[str, Any] | None:
+        """The request this Engine is executing, as Central authorized it."""
+        with self._lock:
+            if not self._request_id:
+                return None
+            row = self._store.execute("SELECT operator_id, duration, target_volume FROM engine_active WHERE request_id=?",
+                                      (self._request_id,)).fetchone()
+            return {
+                "request_id": self._request_id,
+                "operator_id": self._operator_id,
+                "duration_seconds": row[1] if row else None,
+                "target_volume_liters": self._target_volume_liters,
+            }
+
     def clear_local_stop(self, request_id: str) -> None:
         with self._lock:
             self._pending_local_stops.discard(request_id)
@@ -209,6 +225,8 @@ class EngineKafkaService:
             payload = {"end_reason": reason, "duration_seconds": result.duration_seconds, "accumulated_volume_liters": result.accumulated_volume_liters}
             if self._target_volume_liters is not None:
                 payload["target_volume_liters"] = self._target_volume_liters
+            self.last_completed = {"request_id": request_id, "operator_id": operator_id, **payload,
+                                   "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")}
             message = self._event("IRRIGATION_COMPLETED", request_id, operator_id, payload)
             self._store.execute("BEGIN IMMEDIATE")
             try:

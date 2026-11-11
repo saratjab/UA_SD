@@ -107,6 +107,11 @@ class KafkaWorkerRetryTests(unittest.TestCase):
         self.assertEqual(seen, [b"record-0", b"record-0", b"record-1"])
         self.assertEqual(consumer.committed_offsets, [0, 1])
 
+    def test_consumed_records_are_not_logged_at_info(self) -> None:
+        worker = self.worker(LogConsumer(1), lambda _value: True)
+        with self.assertNoLogs("common.kafka_transport", level="INFO"):
+            self.assertTrue(worker.poll_once(0))
+
     def test_poison_record_is_skipped_after_bounded_attempts(self) -> None:
         def always_fails(value: bytes) -> bool:
             if value == b"record-0":

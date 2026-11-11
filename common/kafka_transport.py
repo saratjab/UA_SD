@@ -257,7 +257,10 @@ class KafkaWorker:
                 _timestamp_type, record_timestamp = timestamp_fn()
             except Exception:
                 LOGGER.debug("Could not read Kafka record timestamp", exc_info=True)
-        LOGGER.info(
+        # DEBUG, not INFO: every consumer group reads the whole topic (an FO
+        # also sees other operators' replies before filtering them out), so
+        # one INFO line per record floods every terminal.
+        LOGGER.debug(
             "Kafka record consumed group=%s topic=%s partition=%s offset=%s broker_timestamp_ms=%s",
             self._group_id,
             getattr(msg, "topic", lambda: "unknown")(),
