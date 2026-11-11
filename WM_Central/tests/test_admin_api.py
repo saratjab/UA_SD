@@ -127,6 +127,77 @@ class CentralAdminApiTests(DatabaseTestCase):
         self.assertEqual([e["event"] for e in body["events"]], ["ACTIVATION_REQUEST"])
         self.assertEqual(self.call("GET", f"/v1/events?after={body['last']}")[1]["events"], [])
 
+    def test_console_assets_are_public_and_never_contain_data(self) -> None:
+        with urlopen(self.base_url + "/static/central.js", timeout=3) as response:
+            self.assertIn("javascript", response.headers["Content-Type"])
+            self.assertIn("default-src 'self'", response.headers["Content-Security-Policy"])
+            script = response.read().decode()
+        self.assertNotIn("innerHTML", script)
+        for path in ("/static/../admin_api.py", "/static/missing.js", "/static/central.html"):
+            with self.subTest(path=path):
+                with self.assertRaises(HTTPError) as caught:
+                    urlopen(self.base_url + path, timeout=3)
+                self.assertEqual(caught.exception.code, 404)
+
+    def test_console_read_endpoints_require_the_token(self) -> None:
+        for path in ("/v1/overview", "/v1/irrigations", "/v1/operators"):
+            with self.subTest(path=path):
+                self.assertEqual(self.call("GET", path, token=None)[0], 401)
+
+    def test_overview_counts_stations_by_status_and_live_irrigations(self) -> None:
+        self.service.start_irrigation("WS_001", 30, "OP_001")
+        self.service.issue_station_command("BLOCK_WS", "WS_002")
+        code, body = self.call("GET", "/v1/overview")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["stations"], 2)
+        self.assertEqual(body["by_status"]["OUT_OF_SERVICE"], 1)
+        self.assertEqual(body["blocked"], 1)
+        self.assertEqual(body["live_irrigations"], 1)
+        self.assertEqual(body["monitors_connected"], 2)
+
+    def test_irrigations_show_live_progress_and_recent_history(self) -> None:
+        live_id = self.service.start_irrigation("WS_001", 30, "OP_001")
+        self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {}, ws_id="WS_001", request_id=live_id))
+        self.service.handle_engine_event(envelope(
+            "IRRIGATION_TELEMETRY",
+            {"sequence": 1, "flow_rate_lpm": 6.0, "accumulated_volume_liters": 1.5, "duration_seconds": 15.0},
+            ws_id="WS_001", request_id=live_id))
+        self.service.issue_station_command("BLOCK_WS", "WS_002")
+        denied_id = self.service.start_irrigation("WS_002", 30, "OP_002")
+        code, body = self.call("GET", "/v1/irrigations")
+        self.assertEqual(code, 200)
+        [live] = body["live"]
+        self.assertEqual((live["request_id"], live["status"], live["operator_id"]), (live_id, "WATERING", "OP_001"))
+        self.assertEqual((live["duration_seconds"], live["elapsed_seconds"], live["volume_liters"], live["flow_rate_lpm"]),
+                         (30, 15.0, 1.5, 6.0))
+        [denied] = body["recent"]
+        self.assertEqual((denied["request_id"], denied["status"]), (denied_id, "DENIED"))
+        self.assertTrue(denied["deny_reason"])
+        station = next(row for row in self.call("GET", "/v1/stations")[1]["stations"] if row["station_id"] == "WS_001")
+        self.assertEqual(station["irrigation"]["request_id"], live_id)
+        self.assertEqual(set(self.call("GET", "/v1/irrigations?scope=live")[1]), {"live"})
+        self.assertEqual(self.call("GET", "/v1/irrigations?scope=bogus")[0], 400)
+
+    def test_live_stream_requires_the_token_and_pushes_central_state(self) -> None:
+        self.assertEqual(self.call("GET", "/v1/stream", token=None)[0], 401)
+        request = Request(self.base_url + "/v1/stream",
+                          headers={"Authorization": "Bearer very-secret-test-token"})
+        with urlopen(request, timeout=3) as response:
+            self.assertIn("text/event-stream", response.headers["Content-Type"])
+            raw = b""
+            while b"event: state" not in raw:
+                raw += response.read1(65536)
+        state_block = raw.split(b"event: state\ndata: ", 1)[1].split(b"\n\n", 1)[0]
+        state = json.loads(state_block)
+        self.assertEqual([row["station_id"] for row in state["stations"]], ["WS_001", "WS_002"])
+        self.assertEqual(set(state), {"overview", "stations", "irrigations"})
+
+    def test_operators_lists_active_operators_with_central_default(self) -> None:
+        code, body = self.call("GET", "/v1/operators")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["default"], "CENTRAL")
+        self.assertIn("OP_001", [row["operator_id"] for row in body["operators"]])
+
     def test_station_socket_and_admin_http_listeners_bind_separate_ports(self) -> None:
         socket_server = CentralSocketServer("127.0.0.1", 0, self.state)
         admin_server = CentralAdminServer(

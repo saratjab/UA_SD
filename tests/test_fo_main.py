@@ -96,6 +96,37 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
         self.assertIn("No Watering Stations are currently available", rendered)
         operator.request_irrigation.assert_called_once_with("WS_004", 12, None)
 
+    def test_menu_starts_a_second_station_while_the_first_irrigation_runs(self) -> None:
+        release = threading.Event()
+        requests: list[tuple[str, int]] = []
+        stations = [{"station_id": "WS_001", "location": "North"},
+                    {"station_id": "WS_002", "location": "South"}]
+
+        class Operator:
+            def request_available_stations(self, _timeout):
+                return stations
+
+            def request_irrigation(self, ws_id, duration, target):
+                requests.append((ws_id, duration))
+                return f"request-{ws_id}"
+
+            def wait_for_decision(self, _request_id, _timeout):
+                return True
+
+            def wait_for_result(self, _request_id, _timeout):
+                release.wait(5.0)  # the irrigation is still running
+                return True
+
+        output = io.StringIO()
+        try:
+            with mock.patch("builtins.input", side_effect=["WS_001", "30", "WS_002", "30", "q"]), \
+                    redirect_stdout(output):
+                _interactive_mode(Operator(), timeout=5)
+        finally:
+            release.set()
+        self.assertEqual(requests, [("WS_001", 30), ("WS_002", 30)])
+        self.assertIn("2 irrigation(s) still running", output.getvalue())
+
     def test_discovery_timeout_has_controlled_retry_prompt(self) -> None:
         operator = mock.Mock()
         operator.request_available_stations.side_effect = [TimeoutError("Central timeout")]

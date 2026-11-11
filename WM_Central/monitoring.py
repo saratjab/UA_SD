@@ -167,6 +167,8 @@ def show_control_menu(logger: logging.Logger | None = None) -> None:
         "  5. Block all stations\n"
         "  6. Activate one station\n"
         "  7. Activate all stations\n"
+        "  8. Stop irrigation on one station\n"
+        "  9. Stop all active irrigations\n"
         "  0. Close menu"
     )
 
@@ -188,8 +190,10 @@ def execute_menu_choice(
     if choice == "1":
         logger.info("Station status:\n%s", format_station_table(state.snapshot()))
         return True
+    if choice in {"8", "9"}:
+        return _stop_from_menu(choice == "9", state, service, logger, read)
     if choice not in {"2", "3", "4", "5", "6", "7"}:
-        logger.error("Invalid menu choice %r. Enter a number from 0 to 7.", choice)
+        logger.error("Invalid menu choice %r. Enter a number from 0 to 9.", choice)
         return True
 
     action = {"2": "START", "3": "START", "4": "BLOCK", "5": "BLOCK", "6": "ACTIVATE", "7": "ACTIVATE"}[choice]
@@ -235,4 +239,36 @@ def execute_menu_choice(
             logger.info("%s accepted for station %s", action, target)
         else:
             logger.warning("%s refused for station %s (disconnected, faulted, or invalid state)", action, target)
+    return True
+
+
+def _stop_from_menu(
+    all_stations: bool,
+    state: StateManager,
+    service: object,
+    logger: logging.Logger,
+    read: Callable[[str], str],
+) -> bool:
+    """Menu 8/9: stop the live irrigation on one station, or on every station."""
+    live = service.db.live_irrigations()
+    if all_stations:
+        targets = sorted(live)
+        if not targets:
+            logger.warning("No active irrigations to stop")
+            return True
+    else:
+        ws_id = read("Station ID: ").strip()
+        if not select_station_ids(ws_id, state):
+            logger.error("Invalid station ID %r; no registered station matches it", ws_id)
+            return True
+        if ws_id not in live:
+            logger.warning("Station %s has no active irrigation", ws_id)
+            return True
+        targets = [ws_id]
+    for target in targets:
+        request_id = live[target].request_id
+        if service.issue_station_command("STOP_IRRIGATION", target, request_id=request_id):
+            logger.info("STOP accepted for station %s (request %s)", target, request_id)
+        else:
+            logger.warning("STOP refused for station %s (request %s)", target, request_id)
     return True

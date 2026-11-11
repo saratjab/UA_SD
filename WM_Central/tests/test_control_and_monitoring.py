@@ -122,7 +122,7 @@ class ControlAndMonitoringTests(DatabaseTestCase):
 
     def test_numbered_menu_dispatches_status_and_rejects_invalid_input(self) -> None:
         with self.assertLogs("central-test", level="ERROR") as captured:
-            self.assertTrue(execute_menu_choice("8", self.state, self.service, self.log))
+            self.assertTrue(execute_menu_choice("10", self.state, self.service, self.log))
             self.assertTrue(execute_menu_choice("1", self.state, self.service, self.log))
         self.assertIn("Invalid menu choice", "\n".join(captured.output))
 
@@ -135,6 +135,22 @@ class ControlAndMonitoringTests(DatabaseTestCase):
         execute_menu_choice("7", self.state, self.service, self.log)
         activate_commands = [m for topic, m in self.publisher.records if topic == WS_COMMANDS and m["event_type"] == "ACTIVATE_WS"]
         self.assertEqual([m["ws_id"] for m in activate_commands], ["WS_001", "WS_001", "WS_002"])
+
+    def test_menu_stops_one_and_all_active_irrigations(self) -> None:
+        first = self.service.start_irrigation("WS_001", 60, "CENTRAL")
+        second = self.service.start_irrigation("WS_002", 60, "CENTRAL")
+        execute_menu_choice("8", self.state, self.service, self.log, input_fn=lambda _: "WS_001")
+        execute_menu_choice("9", self.state, self.service, self.log)
+        stops = [(m["ws_id"], m["request_id"]) for topic, m in self.publisher.records
+                 if topic == WS_COMMANDS and m["event_type"] == "STOP_IRRIGATION"]
+        self.assertEqual(stops, [("WS_001", first), ("WS_001", first), ("WS_002", second)])
+
+    def test_menu_stop_without_active_irrigation_sends_nothing(self) -> None:
+        with self.assertLogs("central-test", level="WARNING") as captured:
+            execute_menu_choice("8", self.state, self.service, self.log, input_fn=lambda _: "WS_001")
+            execute_menu_choice("9", self.state, self.service, self.log)
+        self.assertIn("no active irrigation", "\n".join(captured.output))
+        self.assertFalse([m for topic, m in self.publisher.records if m["event_type"] == "STOP_IRRIGATION"])
 
     def test_menu_invalid_station_and_start_duration_are_visible(self) -> None:
         with self.assertLogs("central-test", level="ERROR") as captured:
