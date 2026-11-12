@@ -153,7 +153,6 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
                 "/v1/stations": lambda: {"stations": _station_rows(owner)},
                 "/v1/irrigations": lambda: _irrigation_rows(owner, query),
                 "/v1/overview": lambda: _overview(owner),
-                "/v1/operators": lambda: _operators(owner),
             }
             route = routes.get(parts.path)
             if route is None:
@@ -434,16 +433,6 @@ def _console_state(owner: CentralAdminServer) -> dict[str, Any]:
     }
 
 
-def _operators(owner: CentralAdminServer) -> dict[str, Any]:
-    return {
-        "default": CENTRAL_OPERATOR_ID,
-        "operators": [
-            {"operator_id": operator.operator_id, "name": operator.name}
-            for operator in owner._service.db.list_operators() if operator.active
-        ],
-    }
-
-
 def _execute_command(owner: CentralAdminServer, body: dict[str, Any], idempotency_key: str) -> tuple[dict[str, Any], HTTPStatus]:
     action = body.get("action")
     station_selector = body.get("station_id")
@@ -464,7 +453,7 @@ def _execute_command(owner: CentralAdminServer, body: dict[str, Any], idempotenc
 
     allowed = {"action", "station_id"}
     if action == "start":
-        allowed |= {"duration_seconds", "target_volume_liters", "operator_id"}
+        allowed |= {"duration_seconds", "target_volume_liters"}
     unknown = set(body) - allowed
     if unknown:
         raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}")
@@ -480,14 +469,9 @@ def _execute_command(owner: CentralAdminServer, body: dict[str, Any], idempotenc
         if "target_volume_liters" in body:
             if isinstance(target, bool) or not isinstance(target, (int, float)) or not math.isfinite(target) or target <= 0:
                 raise ValueError("target_volume_liters must be a positive finite number")
-        operator_id = body.get("operator_id")
-        if operator_id is not None and not isinstance(operator_id, str):
-            raise ValueError("operator_id must be a string")
-        operators = owner._service.db.list_operators()
-        if operator_id is None:
-            operator_id = CENTRAL_OPERATOR_ID
-        if not operator_id or not any(operator.operator_id == operator_id and operator.active for operator in operators):
-            raise AdminConflict("no active operator matches operator_id")
+        # Central starts irrigations under its own identity only; it never acts
+        # on behalf of a Field Operator.
+        operator_id = CENTRAL_OPERATOR_ID
         if all_stations:
             targets = [ws_id for ws_id in targets if stations[ws_id].status is StationStatus.AVAILABLE]
         if not targets:

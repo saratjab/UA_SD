@@ -77,21 +77,21 @@ def execute_control_line(line: str, state: StateManager, service: object, logger
     if command in {"QUIT", "EXIT"}:
         return False
     if command in {"HELP", "?"}:
-        logger.info("Commands: START <ws_id|all> <seconds> [operator_id], BLOCK <ws_id|all>, ACTIVATE <ws_id|all>, HELP, QUIT")
+        logger.info("Commands: START <ws_id|all> <seconds>, BLOCK <ws_id|all>, ACTIVATE <ws_id|all>, HELP, QUIT")
         return True
     if command not in {"START", "BLOCK", "ACTIVATE"}:
         logger.warning("Unknown CENTRAL command: %s", args[0])
         return True
     if len(args) < 2:
-        logger.warning("Usage: %s <ws_id|all>%s", command, " <seconds> [operator_id]" if command == "START" else "")
+        logger.warning("Usage: %s <ws_id|all>%s", command, " <seconds>" if command == "START" else "")
         return True
     targets = select_station_ids(args[1], state)
     if not targets:
         logger.warning("No registered station matches %s", args[1])
         return True
     if command == "START":
-        if len(args) not in {3, 4}:
-            logger.warning("Usage: START <ws_id|all> <seconds> [operator_id]")
+        if len(args) != 3:
+            logger.warning("Usage: START <ws_id|all> <seconds>")
             return True
         try:
             duration = int(args[2])
@@ -100,7 +100,7 @@ def execute_control_line(line: str, state: StateManager, service: object, logger
         except ValueError:
             logger.warning("Duration must be a positive whole number of seconds")
             return True
-        operator_id = args[3] if len(args) == 4 else CENTRAL_OPERATOR_ID
+        operator_id = CENTRAL_OPERATOR_ID
         for ws_id in targets:
             request_id = service.start_irrigation(ws_id, duration, operator_id)
             record = state.irrigation(request_id)

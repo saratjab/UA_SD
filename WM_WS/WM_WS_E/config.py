@@ -19,7 +19,6 @@ class EngineConfig:
     reconnect_initial_delay: float = 0.5
     reconnect_max_delay: float = 5.0
     state_path: str | None = None
-    local_operator_id: str | None = None
     panel_host: str = "127.0.0.1"
     panel_port: int = 0
 
@@ -40,11 +39,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--state-path", default=os.environ.get("ENGINE_STATE_PATH"),
         help="Persistent SQLite path for Engine recovery state (default: legacy per-station file in the working directory)",
-    )
-    parser.add_argument(
-        "--local-operator-id",
-        default=os.environ.get("LOCAL_OPERATOR_ID"),
-        help="Central-registered operator ID for the local station menu",
     )
     parser.add_argument(
         "--flow-rate-lpm",
@@ -104,7 +98,6 @@ def parse_args(argv: list[str] | None = None) -> EngineConfig:
         reconnect_initial_delay=args.reconnect_initial_delay,
         reconnect_max_delay=args.reconnect_max_delay,
         state_path=args.state_path,
-        local_operator_id=args.local_operator_id,
         panel_host=args.panel_host,
         panel_port=args.panel_port,
     )

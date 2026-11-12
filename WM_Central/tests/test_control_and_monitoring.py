@@ -54,14 +54,22 @@ class ControlAndMonitoringTests(DatabaseTestCase):
         self.assertEqual([m["ws_id"] for m in activate_commands], ["WS_001", "WS_002"])
 
     def test_start_uses_activation_validation_and_well_formed_engine_contract(self) -> None:
-        execute_control_line("START WS_001 8 OP_001", self.state, self.service, self.log)
+        execute_control_line("START WS_001 8", self.state, self.service, self.log)
         command = next(m for topic, m in self.publisher.records if topic == WS_COMMANDS)
         record = self.db.get_irrigation(command["request_id"])
         self.assertEqual(record.status, IrrigationStatus.AUTHORIZED)
         self.assertEqual(command["event_type"], "START_IRRIGATION")
         self.assertEqual(command["payload"], {"duration_seconds": 8})
         self.assertTrue(command["request_id"])
-        self.assertEqual(command["operator_id"], "OP_001")
+        self.assertEqual(command["operator_id"], "CENTRAL")
+
+    def test_start_cannot_act_on_behalf_of_a_field_operator(self) -> None:
+        execute_control_line("START WS_001 8 OP_001", self.state, self.service, self.log)
+        self.assertEqual(self.db.list_irrigations(), [])
+        self.assertFalse(any(topic == WS_COMMANDS for topic, _m in self.publisher.records))
+
+    def test_station_local_identity_is_seeded_and_active(self) -> None:
+        self.assertTrue(self.db.get_operator("LOCAL").active)
 
     def test_central_started_irrigation_is_attributed_to_central_not_a_field_operator(self) -> None:
         self.assertTrue(self.db.get_operator("CENTRAL").active)
@@ -73,7 +81,7 @@ class ControlAndMonitoringTests(DatabaseTestCase):
 
     def test_start_all_records_normal_denials_for_disconnected_stations(self) -> None:
         self.state.disconnect("WS_002", self.state._connections["WS_002"])
-        execute_control_line("START all 4 OP_001", self.state, self.service, self.log)
+        execute_control_line("START all 4", self.state, self.service, self.log)
         records = self.db.list_irrigations()
         self.assertEqual(len(records), 2)
         self.assertEqual(sum(record.status is IrrigationStatus.AUTHORIZED for record in records), 1)

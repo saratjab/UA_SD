@@ -11,6 +11,7 @@ from .controls import ControlRefused, StationControls
 from .engine import WateringStationEngine
 from .kafka_service import EngineKafkaService
 from WM_FO.kafka_client import FieldOperator
+from common.kafka_contract import LOCAL_OPERATOR_ID
 from common.web_console import start_console
 from common.kafka_transport import KafkaPublisher, KafkaUnavailable
 
@@ -44,7 +45,7 @@ def start_command_thread(
     def command_loop() -> None:
         if local_operator is not None:
             print(
-                f"Local menu: {ws_id} / {local_operator.operator_id} | "
+                f"Local menu: {ws_id} | "
                 "m=start manual, s=stop, f=failure, c=clear, q=quit",
                 flush=True,
             )
@@ -126,9 +127,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         poll_thread.start()
 
-        if config.local_operator_id and config.ws_id:
+        if config.ws_id:
+            # The station's own menu needs no Field Operator: requests go to
+            # Central under the reserved LOCAL identity, and replies are
+            # matched to this station by ws_id.
             local_operator = FieldOperator(
-                config.local_operator_id,
+                LOCAL_OPERATOR_ID,
                 publisher,
                 consumer_group_id=f"wm-ws-local-{config.ws_id}-v1",
                 station_id=config.ws_id,
@@ -145,8 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 local_poll_thread.start()
                 logging.getLogger(__name__).info(
-                    "Local menu enabled ws_id=%s operator_id=%s",
-                    config.ws_id, config.local_operator_id,
+                    "Local menu enabled ws_id=%s", config.ws_id,
                 )
             else:
                 logging.getLogger(__name__).error(

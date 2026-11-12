@@ -69,11 +69,14 @@ class EngineKafkaTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"ENGINE_STATE_PATH": "/engine-state/from-env.sqlite3"}, clear=True):
             from_env = parse_args(arguments)
         self.assertEqual(from_env.state_path, "/engine-state/from-env.sqlite3")
-        local = parse_args(arguments + ["--local-operator-id", "OP_002"])
-        self.assertEqual(local.local_operator_id, "OP_002")
-        with mock.patch.dict("os.environ", {"LOCAL_OPERATOR_ID": "OP_003"}, clear=True):
-            from_env_operator = parse_args(arguments)
-        self.assertEqual(from_env_operator.local_operator_id, "OP_003")
+
+    def test_engine_takes_no_operator_id(self) -> None:
+        # Any Field Operator can use any station: the Engine is never bound to one.
+        arguments = ["--ws-id", "WS_001", "--kafka-host", "broker", "--kafka-port", "9092",
+                     "--monitor-host", "monitor", "--monitor-port", "6001"]
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            parse_args(arguments + ["--local-operator-id", "OP_002"])
+        self.assertFalse(hasattr(parse_args(arguments), "local_operator_id"))
 
     def test_engine_service_creates_parent_for_persistent_state_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

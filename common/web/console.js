@@ -86,6 +86,9 @@
     return Math.floor(seconds / 3600) + "h ago";
   };
   WM.shortId = (id) => (id ? String(id).slice(0, 8) : "—");
+  // Who started an irrigation: Central, the station's own menu, or a Field Operator.
+  WM.startedBy = (id) => (id === "CENTRAL" ? "Started by Central"
+    : id === "LOCAL" ? "Started at the station" : "Operator " + (id || "?"));
   WM.mode = function (item) {
     if (item.duration_seconds != null) return WM.duration(item.duration_seconds);
     if (item.target_volume_liters != null) return WM.litres(item.target_volume_liters) + " target";

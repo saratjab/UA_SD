@@ -106,7 +106,6 @@ class StationControls:
             "central": {"reachable": engine.central_reachable, "via": "WM_WS_M"},
             "kafka": {"connected": self.kafka_service is not None},
             "local_menu": {"enabled": self.local_enabled,
-                           "operator_id": getattr(self.local_operator, "operator_id", None),
                            "pending_request": self.local_request},
             "flow_rate_lpm": engine.config.flow_rate_lpm,
             "irrigation": active,

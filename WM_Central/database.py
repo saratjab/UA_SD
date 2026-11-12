@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from common.kafka_contract import message_key
+from common.kafka_contract import CENTRAL_OPERATOR_ID, LOCAL_OPERATOR_ID, message_key
 
 from .models import (
     AdminState,
@@ -49,7 +49,6 @@ SCHEMA_PATH = DB_DIR / "schema.sql"
 SEED_DEV_PATH = DB_DIR / "seed_dev.sql"
 
 MAX_WS_ID_LENGTH = 64
-CENTRAL_OPERATOR_ID = "CENTRAL"
 
 _LIVE_SQL = "('AUTHORIZED', 'WATERING')"
 
@@ -126,9 +125,11 @@ class Database:
             self._migrate_outbox_keys(conn)
             # Irrigations started from CENTRAL's own controls are attributed to
             # this operator instead of borrowing a real field operator's ID.
-            conn.execute(
+            # Manual starts from a station's own menu use LOCAL; the station
+            # itself is identified by the request's ws_id.
+            conn.executemany(
                 "INSERT OR IGNORE INTO operators (operator_id, name, active) VALUES (?, ?, 1)",
-                (CENTRAL_OPERATOR_ID, "WM_Central"),
+                [(CENTRAL_OPERATOR_ID, "WM_Central"), (LOCAL_OPERATOR_ID, "Watering Station (local menu)")],
             )
 
     @staticmethod

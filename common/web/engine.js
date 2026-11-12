@@ -49,7 +49,7 @@
       replace($("#irrigation"),
         el("div", { style: "margin-top:16px" },
           el("div", { class: "row", style: "margin-bottom:8px" },
-            el("span", { class: "muted", text: (irr.operator_id === "CENTRAL" ? "Started by Central" : "Operator " + irr.operator_id) + " · " + WM.mode(irr) }),
+            el("span", { class: "muted", text: WM.startedBy(irr.operator_id) + " · " + WM.mode(irr) }),
             el("div", { class: "grow" }),
             el("span", { class: "mono muted", title: irr.request_id, text: "req " + WM.shortId(irr.request_id) })),
           WM.progress(item),
@@ -68,9 +68,7 @@
     $("#btn-stop").disabled = !watering && !irr && !local.pending_request;
     $("#btn-fail").disabled = s.failed;
     $("#btn-clear").disabled = !s.failed;
-    $("#local-hint").textContent = local.enabled
-      ? "Manual starts are requested from Central as operator " + local.operator_id + " and run until you stop them." + (local.pending_request ? " Waiting on request " + WM.shortId(local.pending_request) + "." : "")
-      : "Manual start is off: run the Engine with a local operator ID to enable it. Stop still closes the valve.";
+    $("#local-hint").textContent = local.pending_request ? "Waiting on request " + WM.shortId(local.pending_request) + "." : "";
 
     const last = s.last_completed;
     replace($("#last-completed"), last ? el("div", { class: "card flat", style: "padding:12px" },
@@ -79,7 +77,7 @@
         el("dt", { text: "Ended by" }), el("dd", { text: WM.reason(last.end_reason) }),
         el("dt", { text: "Duration" }), el("dd", { text: WM.duration(last.duration_seconds) }),
         el("dt", { text: "Volume" }), el("dd", { text: WM.litres(last.accumulated_volume_liters) }),
-        el("dt", { text: "Operator" }), el("dd", { text: last.operator_id || "—" }),
+        el("dt", { text: "Operator" }), el("dd", { text: last.operator_id ? WM.startedBy(last.operator_id) : "—" }),
         el("dt", { text: "Request" }), el("dd", { class: "mono", text: WM.shortId(last.request_id) }))) : null);
   }
 

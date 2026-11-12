@@ -4,6 +4,8 @@ import argparse
 import os
 from dataclasses import dataclass
 
+from common.kafka_contract import RESERVED_OPERATOR_IDS
+
 
 @dataclass(frozen=True)
 class FieldOperatorConfig:
@@ -47,6 +49,8 @@ def parse_args(argv: list[str] | None = None) -> FieldOperatorConfig:
         raise SystemExit("--duration-seconds must be positive")
     if args.request_file and args.ws_id:
         raise SystemExit("choose either --request-file or a one-off --ws-id request")
+    if args.operator_id.strip().upper() in RESERVED_OPERATOR_IDS:
+        raise SystemExit(f"--operator-id {args.operator_id} is reserved; use a Field Operator ID registered in WM_Central")
     if not 0 <= args.panel_port <= 65535:
         raise SystemExit("--panel-port must be between 0 and 65535")
     return FieldOperatorConfig(args.kafka_host, args.kafka_port, args.operator_id,

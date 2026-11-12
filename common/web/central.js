@@ -8,7 +8,6 @@
   const STATUS_DOT = { AVAILABLE: "var(--ok)", WATERING: "var(--accent)", LEAK: "var(--bad)", OUT_OF_SERVICE: "var(--warn)", DISCONNECTED: "var(--off)" };
 
   let stations = [];
-  let operators = { default: "CENTRAL", operators: [] };
   let live = null;
   let addEvents = null;
 
@@ -90,7 +89,7 @@
         el("div", { class: "metrics" },
           metric("Flow", s.status === "WATERING" ? WM.flow(s.flow_rate_lpm) : "—"),
           metric("Volume", s.status === "WATERING" ? WM.litres(s.total_volume_liters) : "—"),
-          metric("Operator", irrigation ? (irrigation.operator_id === "CENTRAL" ? "Central" : irrigation.operator_id) : "—")),
+          metric("Operator", irrigation ? (irrigation.operator_id === "CENTRAL" ? "Central" : irrigation.operator_id === "LOCAL" ? "Station (local)" : irrigation.operator_id) : "—")),
         irrigation ? WM.progress(irrigation) : null,
         s.fault ? el("div", { class: "fault", text: s.fault }) : null,
         el("div", { class: "card-actions" }, stationActions(s)));
@@ -127,7 +126,9 @@
   }
 
   function operatorLabel(id) {
-    return id === "CENTRAL" ? "Started by Central" : "Field Operator " + (id || "?");
+    if (id === "CENTRAL") return "Started by Central";
+    if (id === "LOCAL") return "Started at the station";
+    return "Field Operator " + (id || "?");
   }
 
   function renderHistory(recent) {
@@ -210,13 +211,6 @@
 
   function eligible() { return stations.filter((s) => s.status === "AVAILABLE" && !s.request_id); }
 
-  function fillOperators() {
-    const options = [el("option", { value: operators.default, text: operators.default + " (Central)" })];
-    operators.operators.filter((o) => o.operator_id !== operators.default)
-      .forEach((o) => options.push(el("option", { value: o.operator_id, text: o.operator_id + (o.name ? " — " + o.name : "") })));
-    replace($("#start-operator"), options);
-  }
-
   function openStart(stationId) { openStartDialog(false, stationId); }
 
   function openStartDialog(all, stationId) {
@@ -235,7 +229,6 @@
     }
     $("#start-submit").disabled = list.length === 0;
     $("#start-submit").textContent = all ? "Start on " + list.length + " station(s)" : "Start irrigation";
-    fillOperators();
     startDialog.showModal();
   }
 
@@ -243,7 +236,7 @@
     if (event.submitter && event.submitter.value === "cancel") return;
     event.preventDefault();
     const mode = modeControl.value();
-    const body = { action: "start", station_id: startAll ? "all" : $("#start-station").value, operator_id: $("#start-operator").value };
+    const body = { action: "start", station_id: startAll ? "all" : $("#start-station").value };
     if (!body.station_id) { $("#start-error").textContent = "Choose a station."; return; }
     if (mode !== "manual") {
       const amount = Number($("#start-amount").value);
@@ -351,7 +344,7 @@
     $("#app").hidden = false;
     $("#sign-out").hidden = false;
     addEvents = addEvents || WM.eventTable({ body: $("#event-rows"), filter: $("#event-filter"), empty: $("#event-empty") });
-    try { operators = await WM.api(API + "/operators"); } catch (e) {
+    try { await WM.api(API + "/overview"); } catch (e) {
       if (e.status === 401) { showLogin("That token was not accepted: it must be exactly the CENTRAL_ADMIN_TOKEN this Central was started with."); return; }
     }
     if (!live) live = WM.stream({ path: WM.config.streamPath, onState: applyState, onEvents: addEvents,

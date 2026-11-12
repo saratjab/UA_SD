@@ -11,6 +11,12 @@ WS_COMMANDS = "wm.ws.commands"
 WS_EVENTS = "wm.ws.events"
 OPERATOR_EVENTS = "wm.operator.events"
 
+# Reserved requester identities. Field Operators use their own registered IDs
+# from the WM_FO app only; Central and a station's own menu use these.
+CENTRAL_OPERATOR_ID = "CENTRAL"
+LOCAL_OPERATOR_ID = "LOCAL"
+RESERVED_OPERATOR_IDS = frozenset({CENTRAL_OPERATOR_ID, LOCAL_OPERATOR_ID})
+
 TOPIC_KEYS = {
     ACTIVATION_REQUESTS: "ws_id",
     WS_COMMANDS: "ws_id",

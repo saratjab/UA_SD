@@ -140,7 +140,7 @@ class CentralAdminApiTests(DatabaseTestCase):
                 self.assertEqual(caught.exception.code, 404)
 
     def test_console_read_endpoints_require_the_token(self) -> None:
-        for path in ("/v1/overview", "/v1/irrigations", "/v1/operators"):
+        for path in ("/v1/overview", "/v1/irrigations", "/v1/stations"):
             with self.subTest(path=path):
                 self.assertEqual(self.call("GET", path, token=None)[0], 401)
 
@@ -192,11 +192,9 @@ class CentralAdminApiTests(DatabaseTestCase):
         self.assertEqual([row["station_id"] for row in state["stations"]], ["WS_001", "WS_002"])
         self.assertEqual(set(state), {"overview", "stations", "irrigations"})
 
-    def test_operators_lists_active_operators_with_central_default(self) -> None:
-        code, body = self.call("GET", "/v1/operators")
-        self.assertEqual(code, 200)
-        self.assertEqual(body["default"], "CENTRAL")
-        self.assertIn("OP_001", [row["operator_id"] for row in body["operators"]])
+    def test_operator_list_endpoint_is_gone(self) -> None:
+        code, _body = self.call("GET", "/v1/operators")
+        self.assertEqual(code, 404)
 
     def test_station_socket_and_admin_http_listeners_bind_separate_ports(self) -> None:
         socket_server = CentralSocketServer("127.0.0.1", 0, self.state)
@@ -266,6 +264,8 @@ class CentralAdminApiTests(DatabaseTestCase):
             ({"action": "block", "station_id": "WS_NOPE"}, 404),
             ({"action": "start", "station_id": "WS_001", "duration_seconds": 3, "target_volume_liters": 2}, 400),
             ({"action": "start", "station_id": "WS_001", "duration_seconds": 0}, 400),
+            # Central never starts an irrigation on behalf of a Field Operator.
+            ({"action": "start", "station_id": "WS_001", "duration_seconds": 3, "operator_id": "OP_001"}, 400),
             ({"action": "block", "station_id": "WS_001", "duration_seconds": 3}, 400),
         ]
         for command, expected in cases:

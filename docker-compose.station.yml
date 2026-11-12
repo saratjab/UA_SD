@@ -52,8 +52,6 @@ services:
       - "6001"
       - --state-path
       - "/engine-state/.wm_ws_e_${WS_ID:?Set WS_ID}.sqlite3"
-      - --local-operator-id
-      - "${LOCAL_OPERATOR_ID:?Set LOCAL_OPERATOR_ID}"
       - --panel-host
       - 0.0.0.0
       - --panel-port
