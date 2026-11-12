@@ -188,5 +188,9 @@ def hello_ack_message(ws_id: str) -> dict[str, str]:
     return {"type": HELLO_ACK, "ws_id": ws_id, "status": "OK"}
 
 
-def health_check_message(ws_id: str, sequence: int) -> dict[str, Any]:
-    return {"type": HEALTH_CHECK, "ws_id": ws_id, "sequence": sequence}
+def health_check_message(ws_id: str, sequence: int, central_connected: bool = True) -> dict[str, Any]:
+    """Monitor -> Engine. ``central_connected`` lets the Engine stop watering
+    on its own when the station can no longer be supervised by CENTRAL.
+    Engines treat a missing field as True (older Monitors)."""
+    return {"type": HEALTH_CHECK, "ws_id": ws_id, "sequence": sequence,
+            "central_connected": central_connected}

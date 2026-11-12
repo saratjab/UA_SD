@@ -7,9 +7,12 @@ import sys
 import threading
 
 from .config import parse_args
+from .controls import ControlRefused, StationControls
 from .engine import WateringStationEngine
 from .kafka_service import EngineKafkaService
 from WM_FO.kafka_client import FieldOperator
+from common.kafka_contract import LOCAL_OPERATOR_ID
+from common.web_console import start_console
 from common.kafka_transport import KafkaPublisher, KafkaUnavailable
 
 
@@ -24,27 +27,25 @@ def start_command_thread(
     engine: WateringStationEngine,
     local_operator: FieldOperator | None = None,
     kafka_service: EngineKafkaService | None = None,
+    controls: StationControls | None = None,
 ) -> threading.Thread:
-    active_lock = threading.Lock()
-    active_request: str | None = None
+    controls = controls or StationControls(engine, local_operator, kafka_service)
     ws_id = engine.config.ws_id
 
-    def watch_request(request_id: str) -> None:
-        nonlocal active_request
+    def run(action) -> None:
         try:
-            local_operator.wait_for_result(request_id, None)
-        finally:
-            if kafka_service is not None:
-                kafka_service.clear_local_stop(request_id)
-            with active_lock:
-                if active_request == request_id:
-                    active_request = None
+            message = action()
+        except ControlRefused as exc:
+            message = str(exc)
+        except Exception as exc:
+            message = f"Could not submit local request: {exc}"
+        if message:
+            print(message, flush=True)
 
     def command_loop() -> None:
-        nonlocal active_request
         if local_operator is not None:
             print(
-                f"Local menu: {ws_id} / {local_operator.operator_id} | "
+                f"Local menu: {ws_id} | "
                 "m=start manual, s=stop, f=failure, c=clear, q=quit",
                 flush=True,
             )
@@ -58,47 +59,13 @@ def start_command_thread(
                 return
 
             if command in {"m", "manual", "start"}:
-                if local_operator is None or kafka_service is None or not ws_id:
-                    print("Local menu is not configured.", flush=True)
-                    continue
-
-                with active_lock:
-                    if active_request is not None or kafka_service.active_request_id is not None or engine.irrigation.state.value != "IDLE":
-                        print("A local request is already pending or active.", flush=True)
-                        continue
-
-                try:
-                    request_id = local_operator.request_irrigation(ws_id)
-                    with active_lock:
-                        active_request = request_id
-                    threading.Thread(
-                        target=watch_request,
-                        args=(request_id,),
-                        name=f"wm-local-request-{ws_id}",
-                        daemon=True,
-                    ).start()
-                except Exception as exc:
-                    print(f"Could not submit local request: {exc}", flush=True)
-
+                run(lambda: None if controls.start_manual() else None)
             elif command in {"s", "stop"}:
-                if local_operator is not None:
-                    with active_lock:
-                        request_id = active_request
-                    if request_id is None:
-                        request_id = kafka_service.active_request_id if kafka_service else None
-                    if request_id is None:
-                        print("There is no active irrigation to stop.", flush=True)
-                    elif kafka_service and kafka_service.stop_local_irrigation(request_id):
-                        print("Local irrigation stop requested.", flush=True)
-                    else:
-                        print("Could not stop that irrigation request.", flush=True)
-                else:
-                    engine.stop_irrigation()
-
+                run(controls.stop)
             elif command in {"f", "fail", "ko"}:
-                engine.simulate_failure()
+                controls.simulate_failure()
             elif command in {"c", "clear"}:
-                engine.clear_failure()
+                controls.clear_failure()
             elif command in {"h", "help", "?"}:
                 print("m=start manual, s=stop, f=failure, c=clear, q=quit", flush=True)
             elif command in {"q", "quit", "exit"}:
@@ -128,9 +95,24 @@ def main(argv: list[str] | None = None) -> int:
     local_poll_thread = None
     local_operator = None
 
+    # The Monitor session runs from the start so health checks are answered
+    # while Kafka is set up. Without --ws-id (the spec's mode) the WS ID comes
+    # from WM_WS_M's HELLO_ACK, and every Kafka resource is named after it.
+    monitor_thread = threading.Thread(target=engine.run, name="wm-ws-e-monitor-session", daemon=True)
+    monitor_thread.start()
+    try:
+        ready = engine.wait_until_monitor_ready()
+    except KeyboardInterrupt:
+        ready = False
+    if not ready:
+        engine.close()
+        monitor_thread.join(timeout=3.0)
+        return 0
+    config = engine.config
+
     try:
         state_path = Path(config.state_path) if config.state_path else Path(
-            f".wm_ws_e_{config.ws_id or 'unassigned'}.sqlite3"
+            f".wm_ws_e_{config.ws_id}.sqlite3"
         )
         publisher = KafkaPublisher(f"{config.kafka_host}:{config.kafka_port}")
         kafka = EngineKafkaService(engine, publisher, state_path)
@@ -145,9 +127,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         poll_thread.start()
 
-        if config.local_operator_id and config.ws_id:
+        if config.ws_id:
+            # The station's own menu needs no Field Operator: requests go to
+            # Central under the reserved LOCAL identity, and replies are
+            # matched to this station by ws_id.
             local_operator = FieldOperator(
-                config.local_operator_id,
+                LOCAL_OPERATOR_ID,
                 publisher,
                 consumer_group_id=f"wm-ws-local-{config.ws_id}-v1",
                 station_id=config.ws_id,
@@ -164,8 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 local_poll_thread.start()
                 logging.getLogger(__name__).info(
-                    "Local menu enabled ws_id=%s operator_id=%s",
-                    config.ws_id, config.local_operator_id,
+                    "Local menu enabled ws_id=%s", config.ws_id,
                 )
             else:
                 logging.getLogger(__name__).error(
@@ -178,10 +162,20 @@ def main(argv: list[str] | None = None) -> int:
     except KafkaUnavailable as exc:
         logging.getLogger(__name__).error("Kafka integration disabled: %s", exc)
 
-    start_command_thread(engine, local_operator, kafka)
+    controls = StationControls(engine, local_operator, kafka)
+    console = start_console(config.panel_host, config.panel_port, "engine",
+                            {"title": f"WM_WS_E {config.ws_id}", "component": "engine", "wsId": config.ws_id},
+                            controls.routes(), controls.status)
+    start_command_thread(engine, local_operator, kafka, controls)
 
     try:
-        return engine.run()
+        while monitor_thread.is_alive():
+            monitor_thread.join(timeout=0.5)
+        return 0
+    except KeyboardInterrupt:
+        engine.close()
+        monitor_thread.join(timeout=3.0)
+        return 0
     finally:
         for name, stop_event, consumer, thread in (
             ("Engine", poll_stop, worker, poll_thread),
@@ -203,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
             kafka.close()
         if publisher is not None:
             publisher.close()
+        if console is not None:
+            console.stop()
 
 
 def _poll_worker(worker: object, stop: threading.Event) -> None:

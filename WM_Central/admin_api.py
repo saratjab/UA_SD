@@ -15,17 +15,28 @@ import os
 import socket
 import sys
 import threading
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from common.event_panel import events_payload
+from common.event_panel import feed
+from common.web_console import STREAM_HEADERS, parse_after, render_page, run_stream, security_headers, static_assets
+
+from .database import CENTRAL_OPERATOR_ID
 from .models import IrrigationStatus, StationStatus
 
 
 LOGGER = logging.getLogger("wm_central.admin_api")
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_CONCURRENT_ADMIN_REQUESTS = 32
+RECENT_IRRIGATIONS_LIMIT = 50
+# Each open console holds one live stream; keep room for API calls.
+MAX_ADMIN_STREAMS = 8
+_ASSETS = static_assets()
 
 
 class AdminConflict(Exception):
@@ -78,6 +89,8 @@ class CentralAdminServer:
         self._token = token
         self._state, self._service = state, service
         self._require_forwarded_https = require_forwarded_https
+        self._stopping = threading.Event()
+        self._streams = threading.BoundedSemaphore(MAX_ADMIN_STREAMS)
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -98,6 +111,7 @@ class CentralAdminServer:
         LOGGER.info("Central admin HTTP listening on %s:%s", self.host, self.port)
 
     def stop(self) -> None:
+        self._stopping.set()  # ends open live streams so shutdown can join them
         server, thread = self._server, self._thread
         self._server = None
         self._thread = None
@@ -119,30 +133,37 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
             super().setup()
 
         def do_GET(self) -> None:
+            parts = urlsplit(self.path)
+            if parts.path == "/panel":
+                # Static page with no data; it asks for the admin token and
+                # sends it as a bearer header to the /v1 endpoints.
+                self._reply_panel()
+                return
+            if parts.path.startswith("/static/"):
+                self._reply_static(parts.path[len("/static/"):])
+                return
             if not self._authorize():
                 return
-            if self.path != "/v1/stations":
+            query = {key: values[0] for key, values in parse_qs(parts.query).items()}
+            if parts.path == "/v1/stream":
+                self._reply_stream(parse_after(query.get("after")))
+                return
+            routes = {
+                "/v1/events": lambda: events_payload(query.get("after", "0")),
+                "/v1/stations": lambda: {"stations": _station_rows(owner)},
+                "/v1/irrigations": lambda: _irrigation_rows(owner, query),
+                "/v1/overview": lambda: _overview(owner),
+            }
+            route = routes.get(parts.path)
+            if route is None:
                 self._reply(HTTPStatus.NOT_FOUND, {"error": "not_found"})
                 return
             try:
-                rows = []
-                live = owner._service.db.live_irrigations()
-                for view in owner._state.snapshot():
-                    irrigation = live.get(view.ws_id)
-                    rows.append({
-                        "station_id": view.ws_id,
-                        "location": view.location,
-                        "status": view.status.value,
-                        "admin_state": view.admin_state.value,
-                        "operator_id": view.operator_id,
-                        "flow_rate_lpm": view.flow_rate_lpm,
-                        "total_volume_liters": view.accumulated_volume_liters,
-                        "fault": view.fault,
-                        "request_id": irrigation.request_id if irrigation else None,
-                    })
-                self._reply(HTTPStatus.OK, {"stations": rows})
+                self._reply(HTTPStatus.OK, route())
+            except ValueError as exc:
+                self._reply(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             except Exception:
-                LOGGER.exception("Central admin could not read station status")
+                LOGGER.exception("Central admin could not read %s", parts.path)
                 self._reply(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal_error"})
 
         def do_POST(self) -> None:
@@ -227,6 +248,67 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
                 LOGGER.warning("Admin response write failed for client %s", self.client_address[0])
             self.close_connection = True
 
+        def _reply_stream(self, after: int) -> None:
+            if not owner._streams.acquire(blocking=False):
+                self._reply(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "too many live streams"})
+                return
+            try:
+                self._last_status = int(HTTPStatus.OK)
+                self.send_response(HTTPStatus.OK)
+                for name, value in STREAM_HEADERS.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.close_connection = True
+
+                def write(chunk: bytes) -> None:
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+
+                run_stream(write, feed(), lambda: _console_state(owner), after, owner._stopping)
+            except OSError:
+                pass  # the browser closed the page
+            except Exception:
+                LOGGER.exception("Central live stream failed")
+            finally:
+                owner._streams.release()
+
+        def _https_ok(self) -> bool:
+            if owner._require_forwarded_https and self.headers.get("X-Forwarded-Proto", "").lower() != "https":
+                self._reply(HTTPStatus.FORBIDDEN, {"error": "https_required"})
+                return False
+            return True
+
+        def _reply_panel(self) -> None:
+            if not self._https_ok():
+                return
+            config = {"title": "WM_Central", "component": "central", "apiBase": "/v1",
+                      "eventsPath": "/v1/events", "streamPath": "/v1/stream", "requiresToken": True}
+            self._reply_bytes("text/html; charset=utf-8", render_page("central", config).encode("utf-8"))
+
+        def _reply_static(self, name: str) -> None:
+            if not self._https_ok():
+                return
+            asset = _ASSETS.get(name)
+            if asset is None:
+                self._reply(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                return
+            self._reply_bytes(*asset)
+
+        def _reply_bytes(self, content_type: str, data: bytes) -> None:
+            self._last_status = int(HTTPStatus.OK)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            for name, value in security_headers().items():
+                self.send_header(name, value)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except OSError:
+                LOGGER.warning("Admin response write failed for client %s", self.client_address[0])
+            self.close_connection = True
+
         def log_message(self, _format: str, *_args: Any) -> None:
             LOGGER.info(
                 "Central admin HTTP method=%s status=%s client=%s",
@@ -234,6 +316,121 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
             )
 
     return Handler
+
+
+def _parse_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _irrigation_row(owner: CentralAdminServer, record: Any, views: dict[str, Any]) -> dict[str, Any]:
+    """One irrigation for the panel, with live telemetry while it is running."""
+    live = record.status in (IrrigationStatus.AUTHORIZED, IrrigationStatus.WATERING)
+    elapsed, volume, flow = record.duration_s, record.total_volume_l, None
+    if live:
+        telemetry = getattr(owner._service, "latest_telemetry", {}).get(record.ws_id)
+        if telemetry is not None and telemetry.request_id == record.request_id:
+            elapsed, volume, flow = telemetry.duration_seconds, telemetry.accumulated_volume_liters, telemetry.flow_rate_lpm
+        elif record.status is IrrigationStatus.WATERING:
+            started = _parse_time(record.started_at)
+            if started is not None:
+                elapsed = max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+    view = views.get(record.ws_id)
+    return {
+        "request_id": record.request_id,
+        "station_id": record.ws_id,
+        "location": view.location if view else None,
+        "operator_id": record.operator_id,
+        "status": record.status.value,
+        "live": live,
+        "deny_reason": record.deny_reason.value if record.deny_reason else None,
+        "end_reason": record.end_reason.value if record.end_reason else None,
+        "duration_seconds": record.requested_duration_s,
+        "target_volume_liters": record.requested_volume_l,
+        "requested_at": record.requested_at,
+        "started_at": record.started_at,
+        "ended_at": record.ended_at,
+        "elapsed_seconds": elapsed,
+        "volume_liters": volume,
+        "flow_rate_lpm": flow,
+    }
+
+
+def _station_rows(owner: CentralAdminServer) -> list[dict[str, Any]]:
+    live = owner._service.db.live_irrigations()
+    views = owner._state.snapshot()
+    by_id = {view.ws_id: view for view in views}
+    rows = []
+    for view in views:
+        irrigation = live.get(view.ws_id)
+        rows.append({
+            "station_id": view.ws_id,
+            "location": view.location,
+            "status": view.status.value,
+            "admin_state": view.admin_state.value,
+            "operator_id": view.operator_id,
+            "flow_rate_lpm": view.flow_rate_lpm,
+            "total_volume_liters": view.accumulated_volume_liters,
+            "fault": view.fault,
+            "request_id": irrigation.request_id if irrigation else None,
+            "irrigation": _irrigation_row(owner, irrigation, by_id) if irrigation else None,
+        })
+    return rows
+
+
+def _irrigation_rows(owner: CentralAdminServer, query: dict[str, str]) -> dict[str, Any]:
+    raw_limit = query.get("limit", str(RECENT_IRRIGATIONS_LIMIT))
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        raise ValueError("limit must be a whole number") from None
+    limit = max(1, min(limit, 500))
+    views = {view.ws_id: view for view in owner._state.snapshot()}
+    db = owner._service.db
+    live = [_irrigation_row(owner, record, views)
+            for record in sorted(db.live_irrigations().values(), key=lambda r: r.requested_at)]
+    scope = query.get("scope", "all")
+    if scope not in {"all", "live", "recent"}:
+        raise ValueError("scope must be all, live, or recent")
+    recent: list[dict[str, Any]] = []
+    if scope != "live":
+        finished = [record for record in db.list_irrigations()
+                    if record.status not in (IrrigationStatus.AUTHORIZED, IrrigationStatus.WATERING)]
+        recent = [_irrigation_row(owner, record, views) for record in reversed(finished[-limit:])]
+    result: dict[str, Any] = {}
+    if scope != "recent":
+        result["live"] = live
+    if scope != "live":
+        result["recent"] = recent
+    return result
+
+
+def _overview(owner: CentralAdminServer) -> dict[str, Any]:
+    views = owner._state.snapshot()
+    counts = {status.value: 0 for status in StationStatus}
+    for view in views:
+        counts[view.status.value] += 1
+    return {
+        "stations": len(views),
+        "by_status": counts,
+        "blocked": sum(1 for view in views if view.admin_state.value == "BLOCKED"),
+        "monitors_connected": len(owner._state.connected_ws_ids()),
+        "live_irrigations": len(owner._service.db.live_irrigations()),
+    }
+
+
+def _console_state(owner: CentralAdminServer) -> dict[str, Any]:
+    """Everything the Central page shows, pushed over its live stream."""
+    return {
+        "overview": _overview(owner),
+        "stations": _station_rows(owner),
+        "irrigations": _irrigation_rows(owner, {}),
+    }
 
 
 def _execute_command(owner: CentralAdminServer, body: dict[str, Any], idempotency_key: str) -> tuple[dict[str, Any], HTTPStatus]:
@@ -256,7 +453,7 @@ def _execute_command(owner: CentralAdminServer, body: dict[str, Any], idempotenc
 
     allowed = {"action", "station_id"}
     if action == "start":
-        allowed |= {"duration_seconds", "target_volume_liters", "operator_id"}
+        allowed |= {"duration_seconds", "target_volume_liters"}
     unknown = set(body) - allowed
     if unknown:
         raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}")
@@ -272,14 +469,9 @@ def _execute_command(owner: CentralAdminServer, body: dict[str, Any], idempotenc
         if "target_volume_liters" in body:
             if isinstance(target, bool) or not isinstance(target, (int, float)) or not math.isfinite(target) or target <= 0:
                 raise ValueError("target_volume_liters must be a positive finite number")
-        operator_id = body.get("operator_id")
-        if operator_id is not None and not isinstance(operator_id, str):
-            raise ValueError("operator_id must be a string")
-        operators = owner._service.db.list_operators()
-        if operator_id is None:
-            operator_id = next((operator.operator_id for operator in operators if operator.active), None)
-        if not operator_id or not any(operator.operator_id == operator_id and operator.active for operator in operators):
-            raise AdminConflict("no active operator matches operator_id")
+        # Central starts irrigations under its own identity only; it never acts
+        # on behalf of a Field Operator.
+        operator_id = CENTRAL_OPERATOR_ID
         if all_stations:
             targets = [ws_id for ws_id in targets if stations[ws_id].status is StationStatus.AVAILABLE]
         if not targets:

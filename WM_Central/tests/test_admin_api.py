@@ -33,6 +33,13 @@ class FakePublisher:
             raise RuntimeError("simulated broker outage")
         self.records.append((topic, message, key))
 
+    def publish_nowait(self, topic: str, message: dict, *, key: str | None = None) -> bool:
+        try:
+            self.publish(topic, message, key=key)
+            return True
+        except RuntimeError:
+            return False
+
 
 class CentralAdminApiTests(DatabaseTestCase):
     def setUp(self) -> None:
@@ -105,6 +112,90 @@ class CentralAdminApiTests(DatabaseTestCase):
         code, _ = self.call("GET", "/v1/stations", forwarded_proto="https")
         self.assertEqual(code, 200)
 
+    def test_live_panel_page_is_public_but_its_events_require_the_token(self) -> None:
+        from common.event_panel import reset_feed
+        feed = reset_feed()
+        feed.record("IN", "WM_FO OP_001", "ACTIVATION_REQUEST", ws_id="WS_001", request_id="r1")
+        with urlopen(self.base_url + "/panel", timeout=3) as response:
+            page = response.read().decode()
+            self.assertIn("text/html", response.headers["Content-Type"])
+        self.assertIn('"requiresToken": true', page)
+        self.assertNotIn("very-secret-test-token", page)
+        self.assertEqual(self.call("GET", "/v1/events", token=None)[0], 401)
+        code, body = self.call("GET", "/v1/events?after=0")
+        self.assertEqual(code, 200)
+        self.assertEqual([e["event"] for e in body["events"]], ["ACTIVATION_REQUEST"])
+        self.assertEqual(self.call("GET", f"/v1/events?after={body['last']}")[1]["events"], [])
+
+    def test_console_assets_are_public_and_never_contain_data(self) -> None:
+        with urlopen(self.base_url + "/static/central.js", timeout=3) as response:
+            self.assertIn("javascript", response.headers["Content-Type"])
+            self.assertIn("default-src 'self'", response.headers["Content-Security-Policy"])
+            script = response.read().decode()
+        self.assertNotIn("innerHTML", script)
+        for path in ("/static/../admin_api.py", "/static/missing.js", "/static/central.html"):
+            with self.subTest(path=path):
+                with self.assertRaises(HTTPError) as caught:
+                    urlopen(self.base_url + path, timeout=3)
+                self.assertEqual(caught.exception.code, 404)
+
+    def test_console_read_endpoints_require_the_token(self) -> None:
+        for path in ("/v1/overview", "/v1/irrigations", "/v1/stations"):
+            with self.subTest(path=path):
+                self.assertEqual(self.call("GET", path, token=None)[0], 401)
+
+    def test_overview_counts_stations_by_status_and_live_irrigations(self) -> None:
+        self.service.start_irrigation("WS_001", 30, "OP_001")
+        self.service.issue_station_command("BLOCK_WS", "WS_002")
+        code, body = self.call("GET", "/v1/overview")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["stations"], 2)
+        self.assertEqual(body["by_status"]["OUT_OF_SERVICE"], 1)
+        self.assertEqual(body["blocked"], 1)
+        self.assertEqual(body["live_irrigations"], 1)
+        self.assertEqual(body["monitors_connected"], 2)
+
+    def test_irrigations_show_live_progress_and_recent_history(self) -> None:
+        live_id = self.service.start_irrigation("WS_001", 30, "OP_001")
+        self.service.handle_engine_event(envelope("IRRIGATION_STARTED", {}, ws_id="WS_001", request_id=live_id))
+        self.service.handle_engine_event(envelope(
+            "IRRIGATION_TELEMETRY",
+            {"sequence": 1, "flow_rate_lpm": 6.0, "accumulated_volume_liters": 1.5, "duration_seconds": 15.0},
+            ws_id="WS_001", request_id=live_id))
+        self.service.issue_station_command("BLOCK_WS", "WS_002")
+        denied_id = self.service.start_irrigation("WS_002", 30, "OP_002")
+        code, body = self.call("GET", "/v1/irrigations")
+        self.assertEqual(code, 200)
+        [live] = body["live"]
+        self.assertEqual((live["request_id"], live["status"], live["operator_id"]), (live_id, "WATERING", "OP_001"))
+        self.assertEqual((live["duration_seconds"], live["elapsed_seconds"], live["volume_liters"], live["flow_rate_lpm"]),
+                         (30, 15.0, 1.5, 6.0))
+        [denied] = body["recent"]
+        self.assertEqual((denied["request_id"], denied["status"]), (denied_id, "DENIED"))
+        self.assertTrue(denied["deny_reason"])
+        station = next(row for row in self.call("GET", "/v1/stations")[1]["stations"] if row["station_id"] == "WS_001")
+        self.assertEqual(station["irrigation"]["request_id"], live_id)
+        self.assertEqual(set(self.call("GET", "/v1/irrigations?scope=live")[1]), {"live"})
+        self.assertEqual(self.call("GET", "/v1/irrigations?scope=bogus")[0], 400)
+
+    def test_live_stream_requires_the_token_and_pushes_central_state(self) -> None:
+        self.assertEqual(self.call("GET", "/v1/stream", token=None)[0], 401)
+        request = Request(self.base_url + "/v1/stream",
+                          headers={"Authorization": "Bearer very-secret-test-token"})
+        with urlopen(request, timeout=3) as response:
+            self.assertIn("text/event-stream", response.headers["Content-Type"])
+            raw = b""
+            while b"event: state" not in raw:
+                raw += response.read1(65536)
+        state_block = raw.split(b"event: state\ndata: ", 1)[1].split(b"\n\n", 1)[0]
+        state = json.loads(state_block)
+        self.assertEqual([row["station_id"] for row in state["stations"]], ["WS_001", "WS_002"])
+        self.assertEqual(set(state), {"overview", "stations", "irrigations"})
+
+    def test_operator_list_endpoint_is_gone(self) -> None:
+        code, _body = self.call("GET", "/v1/operators")
+        self.assertEqual(code, 404)
+
     def test_station_socket_and_admin_http_listeners_bind_separate_ports(self) -> None:
         socket_server = CentralSocketServer("127.0.0.1", 0, self.state)
         admin_server = CentralAdminServer(
@@ -173,6 +264,8 @@ class CentralAdminApiTests(DatabaseTestCase):
             ({"action": "block", "station_id": "WS_NOPE"}, 404),
             ({"action": "start", "station_id": "WS_001", "duration_seconds": 3, "target_volume_liters": 2}, 400),
             ({"action": "start", "station_id": "WS_001", "duration_seconds": 0}, 400),
+            # Central never starts an irrigation on behalf of a Field Operator.
+            ({"action": "start", "station_id": "WS_001", "duration_seconds": 3, "operator_id": "OP_001"}, 400),
             ({"action": "block", "station_id": "WS_001", "duration_seconds": 3}, 400),
         ]
         for command, expected in cases:

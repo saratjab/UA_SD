@@ -11,6 +11,12 @@ WS_COMMANDS = "wm.ws.commands"
 WS_EVENTS = "wm.ws.events"
 OPERATOR_EVENTS = "wm.operator.events"
 
+# Reserved requester identities. Field Operators use their own registered IDs
+# from the WM_FO app only; Central and a station's own menu use these.
+CENTRAL_OPERATOR_ID = "CENTRAL"
+LOCAL_OPERATOR_ID = "LOCAL"
+RESERVED_OPERATOR_IDS = frozenset({CENTRAL_OPERATOR_ID, LOCAL_OPERATOR_ID})
+
 TOPIC_KEYS = {
     ACTIVATION_REQUESTS: "ws_id",
     WS_COMMANDS: "ws_id",
@@ -32,6 +38,8 @@ COMMAND_REJECTION_REASONS = frozenset({
     "ENGINE_BLOCKED",
     "ENGINE_FAILED",
     "MONITOR_UNAVAILABLE",
+    "ENGINE_BUSY",
+    "COMMAND_EXPIRED",
 })
 
 REQUIRED = ("event_type", "message_id", "timestamp", "payload")
@@ -75,7 +83,7 @@ def validate(message: object, *, required_ids: tuple[str, ...] = ()) -> None:
     for field in ("event_type", "message_id", "timestamp") + required_ids:
         if not isinstance(message.get(field), str) or not message[field].strip():
             raise MessageValidationError(f"missing or invalid {field}")
-    if not isinstance(message["payload"], dict):
+    if not isinstance(message.get("payload"), dict):
         raise MessageValidationError("payload must be an object")
     try:
         datetime.fromisoformat(message["timestamp"].replace("Z", "+00:00"))

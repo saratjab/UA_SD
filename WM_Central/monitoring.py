@@ -11,6 +11,7 @@ import sys
 import threading
 from collections.abc import Callable
 
+from .database import CENTRAL_OPERATOR_ID
 from .models import StationStatus, StationView
 from .state_manager import StateManager
 
@@ -76,21 +77,21 @@ def execute_control_line(line: str, state: StateManager, service: object, logger
     if command in {"QUIT", "EXIT"}:
         return False
     if command in {"HELP", "?"}:
-        logger.info("Commands: START <ws_id|all> <seconds> [operator_id], BLOCK <ws_id|all>, ACTIVATE <ws_id|all>, HELP, QUIT")
+        logger.info("Commands: START <ws_id|all> <seconds>, BLOCK <ws_id|all>, ACTIVATE <ws_id|all>, HELP, QUIT")
         return True
     if command not in {"START", "BLOCK", "ACTIVATE"}:
         logger.warning("Unknown CENTRAL command: %s", args[0])
         return True
     if len(args) < 2:
-        logger.warning("Usage: %s <ws_id|all>%s", command, " <seconds> [operator_id]" if command == "START" else "")
+        logger.warning("Usage: %s <ws_id|all>%s", command, " <seconds>" if command == "START" else "")
         return True
     targets = select_station_ids(args[1], state)
     if not targets:
         logger.warning("No registered station matches %s", args[1])
         return True
     if command == "START":
-        if len(args) not in {3, 4}:
-            logger.warning("Usage: START <ws_id|all> <seconds> [operator_id]")
+        if len(args) != 3:
+            logger.warning("Usage: START <ws_id|all> <seconds>")
             return True
         try:
             duration = int(args[2])
@@ -99,11 +100,7 @@ def execute_control_line(line: str, state: StateManager, service: object, logger
         except ValueError:
             logger.warning("Duration must be a positive whole number of seconds")
             return True
-        operators = state.operators()
-        operator_id = args[3] if len(args) == 4 else next((op.operator_id for op in operators if op.active), None)
-        if operator_id is None:
-            logger.warning("No active operator is registered; pass an operator_id or register one first")
-            return True
+        operator_id = CENTRAL_OPERATOR_ID
         for ws_id in targets:
             request_id = service.start_irrigation(ws_id, duration, operator_id)
             record = state.irrigation(request_id)
@@ -170,6 +167,8 @@ def show_control_menu(logger: logging.Logger | None = None) -> None:
         "  5. Block all stations\n"
         "  6. Activate one station\n"
         "  7. Activate all stations\n"
+        "  8. Stop irrigation on one station\n"
+        "  9. Stop all active irrigations\n"
         "  0. Close menu"
     )
 
@@ -191,8 +190,10 @@ def execute_menu_choice(
     if choice == "1":
         logger.info("Station status:\n%s", format_station_table(state.snapshot()))
         return True
+    if choice in {"8", "9"}:
+        return _stop_from_menu(choice == "9", state, service, logger, read)
     if choice not in {"2", "3", "4", "5", "6", "7"}:
-        logger.error("Invalid menu choice %r. Enter a number from 0 to 7.", choice)
+        logger.error("Invalid menu choice %r. Enter a number from 0 to 9.", choice)
         return True
 
     action = {"2": "START", "3": "START", "4": "BLOCK", "5": "BLOCK", "6": "ACTIVATE", "7": "ACTIVATE"}[choice]
@@ -220,11 +221,7 @@ def execute_menu_choice(
         except ValueError:
             logger.error("Duration must be a positive whole number of seconds")
             return True
-        operators = state.operators()
-        operator_id = next((op.operator_id for op in operators if op.active), None)
-        if operator_id is None:
-            logger.error("No active operator is registered; irrigation was not started")
-            return True
+        operator_id = CENTRAL_OPERATOR_ID
         for target in targets:
             request_id = service.start_irrigation(target, duration, operator_id)
             record = state.irrigation(request_id)
@@ -242,4 +239,36 @@ def execute_menu_choice(
             logger.info("%s accepted for station %s", action, target)
         else:
             logger.warning("%s refused for station %s (disconnected, faulted, or invalid state)", action, target)
+    return True
+
+
+def _stop_from_menu(
+    all_stations: bool,
+    state: StateManager,
+    service: object,
+    logger: logging.Logger,
+    read: Callable[[str], str],
+) -> bool:
+    """Menu 8/9: stop the live irrigation on one station, or on every station."""
+    live = service.db.live_irrigations()
+    if all_stations:
+        targets = sorted(live)
+        if not targets:
+            logger.warning("No active irrigations to stop")
+            return True
+    else:
+        ws_id = read("Station ID: ").strip()
+        if not select_station_ids(ws_id, state):
+            logger.error("Invalid station ID %r; no registered station matches it", ws_id)
+            return True
+        if ws_id not in live:
+            logger.warning("Station %s has no active irrigation", ws_id)
+            return True
+        targets = [ws_id]
+    for target in targets:
+        request_id = live[target].request_id
+        if service.issue_station_command("STOP_IRRIGATION", target, request_id=request_id):
+            logger.info("STOP accepted for station %s (request %s)", target, request_id)
+        else:
+            logger.warning("STOP refused for station %s (request %s)", target, request_id)
     return True

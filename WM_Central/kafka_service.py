@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+from datetime import datetime, timedelta, timezone
 from uuid import NAMESPACE_URL, uuid5
 from uuid import uuid4
 from dataclasses import dataclass
@@ -11,10 +12,11 @@ from typing import Any
 
 from common.kafka_contract import (ACTIVATION_REQUESTS, COMMAND_REJECTION_REASONS, OPERATOR_EVENTS, WS_COMMANDS, WS_EVENTS,
                                    MessageValidationError, decode, envelope, message_key)
+from common.event_panel import describe, feed
 from common.kafka_transport import KafkaPublisher, KafkaWorker
 
 from .database import Database
-from .models import DenyReason, EndReason, IrrigationStatus, StationStatus
+from .models import DenyReason, EndReason, IrrigationRecord, IrrigationStatus, StationStatus
 from .state_manager import StateManager
 
 LOGGER = logging.getLogger(__name__)
@@ -35,11 +37,50 @@ class CentralKafkaService:
     Consumers commit only after this service returns successfully.  SQLite's unique
     request id and idempotent transitions make an at-least-once Kafka delivery safe.
     """
+    # Must exceed the Engine's COMMAND_TTL_SECONDS (60 s) plus any clock skew,
+    # so an Engine never starts a request that has already been expired here.
+    AUTHORIZATION_TIMEOUT_SECONDS = 90.0
+
     def __init__(self, db: Database, state: StateManager, publisher: KafkaPublisher) -> None:
         self.db, self.state, self.publisher = db, state, publisher
         self.latest_telemetry: dict[str, LatestTelemetry] = {}
         self._outbox_flush_lock = threading.Lock()
+        state.set_termination_outgoing(self._central_termination_outgoing)
         self.flush_outbox()
+
+    # EndReason recorded by CENTRAL -> end_reason vocabulary the FO already shows.
+    _CENTRAL_END_REASONS = {
+        EndReason.LEAK: "LEAK_DETECTED",
+        EndReason.BLOCKED: "STATION_BLOCKED",
+        EndReason.DISCONNECTED: "MONITOR_DISCONNECTED",
+    }
+
+    def _central_termination_outgoing(self, record: IrrigationRecord) -> list[tuple[str, str, str | None, dict[str, Any]]]:
+        """Messages for an irrigation CENTRAL ended itself (leak, block, disconnect).
+
+        The Engine must stop even if its Monitor link is still up; BLOCK_WS
+        already stops it, so only the other reasons need STOP_IRRIGATION. The
+        operator gets the final summary now instead of waiting for an Engine
+        completion that may never come. Its identity equals the Engine-driven
+        completion's, so the operator is notified exactly once.
+        """
+        rows = []
+        if record.end_reason is not EndReason.BLOCKED:
+            rows.append(self._outgoing(WS_COMMANDS, "STOP_IRRIGATION", {}, f"central-stop:{record.request_id}",
+                                       ws_id=record.ws_id, request_id=record.request_id))
+        if record.operator_id:
+            payload: dict[str, Any] = {
+                "end_reason": self._CENTRAL_END_REASONS.get(record.end_reason, record.end_reason.value),
+                "measured_by": "CENTRAL",
+            }
+            latest = self.latest_telemetry.get(record.ws_id)
+            if latest is not None and latest.request_id == record.request_id:
+                payload["duration_seconds"] = latest.duration_seconds
+                payload["accumulated_volume_liters"] = latest.accumulated_volume_liters
+            rows.append(self._outgoing(OPERATOR_EVENTS, "IRRIGATION_COMPLETED", payload, f"completed:{record.request_id}",
+                                       operator_id=record.operator_id, ws_id=record.ws_id,
+                                       request_id=record.request_id, key=record.operator_id))
+        return rows
 
     def flush_outbox(self) -> None:
         with self._outbox_flush_lock:
@@ -50,6 +91,18 @@ class CentralKafkaService:
                 except Exception:
                     LOGGER.exception("Central outbox item remains pending message_id=%s", message_id)
                     break
+                self._record_out(topic, message)
+
+    @staticmethod
+    def _peer(topic: str, message: dict[str, Any]) -> str:
+        if topic == OPERATOR_EVENTS:
+            return f"WM_FO {message.get('operator_id', '')}".strip()
+        return f"WM_WS_E {message.get('ws_id', '')}".strip()
+
+    def _record_out(self, topic: str, message: dict[str, Any]) -> None:
+        feed().record("OUT", self._peer(topic, message), message.get("event_type", "?"),
+                      ws_id=message.get("ws_id"), request_id=message.get("request_id"),
+                      detail=describe(message.get("payload")))
 
     @staticmethod
     def _outgoing(topic: str, event_type: str, payload: dict[str, Any], identity: str,
@@ -71,6 +124,9 @@ class CentralKafkaService:
     def handle_activation_bytes(self, raw: bytes) -> bool:
         try:
             message = decode(raw)
+            feed().record("IN", f"WM_FO {message.get('operator_id', '')}".strip(), message["event_type"],
+                          ws_id=message.get("ws_id"), request_id=message.get("request_id"),
+                          detail=describe(message["payload"]))
             if message["event_type"] == "AVAILABLE_STATIONS_REQUEST":
                 self.handle_available_stations_request(message)
             else:
@@ -94,10 +150,13 @@ class CentralKafkaService:
         elif not operator.active:
             error = "OPERATOR_INACTIVE"
         else:
+            # A station with a pending (AUTHORIZED) request still displays as
+            # AVAILABLE, but a new request would be denied as WS_BUSY.
+            live = self.db.live_irrigations()
             stations = [
                 {"station_id": view.ws_id, "location": view.location}
                 for view in self.state.snapshot()
-                if view.status is StationStatus.AVAILABLE
+                if view.status is StationStatus.AVAILABLE and view.ws_id not in live
             ]
         row = self._outgoing(
             OPERATOR_EVENTS,
@@ -152,23 +211,27 @@ class CentralKafkaService:
                 self.db.add_outgoing(*row)
             self.flush_outbox()
             return
-        reason = None
-        if not operator.active:
-            reason = DenyReason.OPERATOR_INACTIVE
-        else:
-            status = self.state.status_of(ws_id)
-            reason = {StationStatus.DISCONNECTED: DenyReason.WS_DISCONNECTED,
-                      StationStatus.LEAK: DenyReason.WS_LEAK,
-                      StationStatus.OUT_OF_SERVICE: DenyReason.WS_OUT_OF_SERVICE,
-                      StationStatus.WATERING: DenyReason.WS_BUSY}.get(status)
-        outgoing = []
-        if reason is None:
-            outgoing.extend([
-                self._outgoing(WS_COMMANDS, "START_IRRIGATION", mode_payload, f"start:{request_id}", ws_id=ws_id, operator_id=operator_id, request_id=request_id),
-                self._outgoing(OPERATOR_EVENTS, "ACTIVATION_AUTHORIZED", mode_payload, f"authorized:{request_id}", operator_id=operator_id, ws_id=ws_id, request_id=request_id, key=operator_id),
-            ])
-        denied_outgoing = [self._outgoing(OPERATOR_EVENTS, "ACTIVATION_DENIED", {"reason": (reason or DenyReason.WS_BUSY).value}, f"denied:{request_id}", operator_id=operator_id, ws_id=ws_id, request_id=request_id, key=operator_id)]
-        record = self.db.record_irrigation_request(request_id, ws_id, operator_id, int(duration) if has_duration else None, reason, outgoing, denied_outgoing, float(target_volume) if has_target else None)
+        # The status check and the insert must be one atomic step: otherwise a
+        # BLOCK/fault/disconnect in between authorizes a station that is no
+        # longer available. StateManager's lock serializes all of those.
+        with self.state.exclusive():
+            reason = None
+            if not operator.active:
+                reason = DenyReason.OPERATOR_INACTIVE
+            else:
+                status = self.state.status_of(ws_id)
+                reason = {StationStatus.DISCONNECTED: DenyReason.WS_DISCONNECTED,
+                          StationStatus.LEAK: DenyReason.WS_LEAK,
+                          StationStatus.OUT_OF_SERVICE: DenyReason.WS_OUT_OF_SERVICE,
+                          StationStatus.WATERING: DenyReason.WS_BUSY}.get(status)
+            outgoing = []
+            if reason is None:
+                outgoing.extend([
+                    self._outgoing(WS_COMMANDS, "START_IRRIGATION", mode_payload, f"start:{request_id}", ws_id=ws_id, operator_id=operator_id, request_id=request_id),
+                    self._outgoing(OPERATOR_EVENTS, "ACTIVATION_AUTHORIZED", mode_payload, f"authorized:{request_id}", operator_id=operator_id, ws_id=ws_id, request_id=request_id, key=operator_id),
+                ])
+            denied_outgoing = [self._outgoing(OPERATOR_EVENTS, "ACTIVATION_DENIED", {"reason": (reason or DenyReason.WS_BUSY).value}, f"denied:{request_id}", operator_id=operator_id, ws_id=ws_id, request_id=request_id, key=operator_id)]
+            record = self.db.record_irrigation_request(request_id, ws_id, operator_id, int(duration) if has_duration else None, reason, outgoing, denied_outgoing, float(target_volume) if has_target else None)
         if record.status is IrrigationStatus.DENIED:
             self.flush_outbox()
             return
@@ -176,7 +239,11 @@ class CentralKafkaService:
 
     def handle_engine_bytes(self, raw: bytes) -> bool:
         try:
-            self.handle_engine_event(decode(raw)); return True
+            message = decode(raw)
+            feed().record("IN", f"WM_WS_E {message.get('ws_id', '')}".strip(), message["event_type"],
+                          ws_id=message.get("ws_id"), request_id=message.get("request_id"),
+                          detail=describe(message["payload"]))
+            self.handle_engine_event(message); return True
         except MessageValidationError as exc:
             LOGGER.warning("Discarding malformed Engine event: %s", exc); return True
 
@@ -215,13 +282,36 @@ class CentralKafkaService:
         elif event_type == "COMMAND_REJECTED":
             reason = {"ENGINE_BLOCKED": DenyReason.ENGINE_BLOCKED,
                       "ENGINE_FAILED": DenyReason.ENGINE_FAILED,
-                      "MONITOR_UNAVAILABLE": DenyReason.MONITOR_UNAVAILABLE}.get(payload.get("reason"))
+                      "MONITOR_UNAVAILABLE": DenyReason.MONITOR_UNAVAILABLE,
+                      "ENGINE_BUSY": DenyReason.WS_BUSY,
+                      "COMMAND_EXPIRED": DenyReason.ENGINE_FAILED}.get(payload.get("reason"))
             if payload.get("reason") not in COMMAND_REJECTION_REASONS or reason is None:
                 raise MessageValidationError("invalid command rejection reason")
             outgoing = [self._outgoing(OPERATOR_EVENTS, "COMMAND_REJECTED", payload, f"rejected:{request_id}", operator_id=record.operator_id, ws_id=ws_id, request_id=request_id, key=record.operator_id)] if record.operator_id else []
             self.db.reject_authorized_irrigation(request_id, reason, outgoing)
             self.flush_outbox()
         else: raise MessageValidationError("unsupported Engine event_type")
+
+    def expire_stale_authorizations(self, now: datetime | None = None) -> int:
+        """Release stations whose START was never answered by the Engine."""
+        def notify(record: IrrigationRecord) -> list[tuple[str, str, str | None, dict[str, Any]]]:
+            LOGGER.warning("START for request %s on %s timed out; request denied", record.request_id, record.ws_id)
+            if not record.operator_id:
+                return []
+            return [self._outgoing(OPERATOR_EVENTS, "COMMAND_REJECTED", {"reason": "START_TIMEOUT"},
+                                   f"rejected:{record.request_id}", operator_id=record.operator_id,
+                                   ws_id=record.ws_id, request_id=record.request_id, key=record.operator_id)]
+        expired = self.db.expire_stale_authorizations(
+            self.AUTHORIZATION_TIMEOUT_SECONDS, now or datetime.now(timezone.utc), notify)
+        if expired:
+            self.flush_outbox()
+        return len(expired)
+
+    DELIVERED_RETENTION = timedelta(hours=24)
+
+    def prune_outbox(self, now: datetime | None = None) -> int:
+        cutoff = (now or datetime.now(timezone.utc)) - self.DELIVERED_RETENTION
+        return self.db.prune_delivered(cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z"))
 
     def _telemetry(self, record: Any, message: dict[str, Any]) -> None:
         p, seq = message["payload"], message["payload"].get("sequence")
@@ -231,7 +321,16 @@ class CentralKafkaService:
         if record.status is IrrigationStatus.WATERING and (old is None or old.request_id != values.request_id or seq > old.sequence):
             self.latest_telemetry[record.ws_id] = values
             self.state.update_telemetry(record.ws_id, values.flow_rate_lpm, values.accumulated_volume_liters)
-            self._notify(record.operator_id, record.request_id, record.ws_id, "IRRIGATION_PROGRESS", p)
+            if record.operator_id:
+                # Progress arrives every second and each sample replaces the
+                # previous one, so it skips the durable outbox; the final
+                # summary still goes through it.
+                progress = self._outgoing(OPERATOR_EVENTS, "IRRIGATION_PROGRESS", p,
+                                          f"IRRIGATION_PROGRESS:{record.request_id}:{seq}",
+                                          operator_id=record.operator_id, ws_id=record.ws_id,
+                                          request_id=record.request_id, key=record.operator_id)
+                if self.publisher.publish_nowait(OPERATOR_EVENTS, progress[3], key=record.operator_id):
+                    self._record_out(OPERATOR_EVENTS, progress[3])
 
     def start_irrigation(self, ws_id: str, duration_seconds: int | None, operator_id: str,
                          target_volume_liters: float | None = None, *, request_id: str | None = None) -> str:
@@ -241,6 +340,8 @@ class CentralKafkaService:
                    {"target_volume_liters": target_volume_liters} if target_volume_liters is not None else {})
         message = envelope("ACTIVATION_REQUEST", payload,
                            ws_id=ws_id, operator_id=operator_id, request_id=request_id)
+        feed().record("LOCAL", "CENTRAL controls", "ACTIVATION_REQUEST", ws_id=ws_id,
+                      request_id=request_id, detail=describe(payload))
         self.handle_activation(message)
         return request_id
 

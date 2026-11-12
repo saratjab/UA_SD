@@ -10,7 +10,11 @@ import sys
 import threading
 import time
 
+from http import HTTPStatus
+
 from common.kafka_transport import KafkaPublisher, KafkaUnavailable
+from common.web_console import (ApiError, ApiRequest, ConsoleServer, optional_positive_int,
+                                optional_positive_number, require_str, start_console)
 
 from .config import parse_args
 from .kafka_client import FieldOperator
@@ -18,7 +22,16 @@ from .request_file import load_requests
 
 LOGGER = logging.getLogger("wm_fo")
 FILE_REQUEST_DELAY_SECONDS = 4.0
+# Extra wait beyond a request's own duration: covers authorization, the Engine
+# start and Central's START timeout before a terminal event must have arrived.
+FILE_REQUEST_GRACE_SECONDS = 120.0
 POLL_SHUTDOWN_TIMEOUT_SECONDS = 3.0
+# How long the interactive menu waits for Central to authorize or deny a
+# request before showing the station list again.
+DECISION_WAIT_SECONDS = 5.0
+# The web console asks Central for the station list with a short timeout so
+# the page stays responsive when Central is slow or down.
+CONSOLE_DISCOVERY_TIMEOUT_SECONDS = 5.0
 
 
 def _poll_worker(worker: object, ready: threading.Event | None = None,
@@ -70,23 +83,86 @@ def _submit_and_wait(operator: FieldOperator, ws_id: str, duration: int | None,
 
 
 def _file_mode(operator: FieldOperator, path: str, timeout: float) -> None:
+    """Send each request, wait for its outcome, pause 4 s, then send the next.
+
+    The spec moves on once a request concludes "whether successfully or not",
+    so one request whose outcome never arrives must not block the whole file.
+    """
     requests = load_requests(path)
     for index, request in enumerate(requests):
         LOGGER.info("Processing file request %d of %d", index + 1, len(requests))
         duration = request.get("duration_seconds")
         target = request.get("target_volume_liters")
-        if not _submit_and_wait(operator, request["ws_id"], duration, None, target):
-            raise RuntimeError(f"request {request.get('ws_id')} lost its terminal-result waiter; stopping file sequence")
+        wait = max(timeout, duration + FILE_REQUEST_GRACE_SECONDS) if duration else timeout
+        if not _submit_and_wait(operator, request["ws_id"], duration, wait, target):
+            LOGGER.warning("No final result for the request on %s within %.0f s; moving on",
+                           request["ws_id"], wait)
         if index + 1 < len(requests):
             time.sleep(FILE_REQUEST_DELAY_SECONDS)
+
+
+def _stdin_is_interactive() -> bool:
+    return bool(getattr(sys.stdin, "isatty", lambda: False)())
 
 
 def _is_quit(value: str) -> bool:
     return value.strip().casefold() in {"q", "quit", "exit"}
 
 
-def _interactive_mode(operator: FieldOperator, timeout: float) -> None:
+class _ActiveRequests:
+    """Interactive requests still waiting for their final result.
+
+    Each request gets its own watcher thread, so the menu is free to send the
+    next request (to another station) while earlier irrigations are running.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._ids: set[str] = set()
+
+    def watch(self, operator: FieldOperator, request_id: str, timeout: float | None) -> threading.Thread:
+        with self._lock:
+            self._ids.add(request_id)
+
+        def run() -> None:
+            try:
+                if not operator.wait_for_result(request_id, timeout):
+                    mark = getattr(operator, "mark_no_result", None)
+                    if mark is not None:
+                        mark(request_id)
+            except Exception:
+                LOGGER.exception("Watching request %s failed", request_id)
+            finally:
+                with self._lock:
+                    self._ids.discard(request_id)
+
+        thread = threading.Thread(target=run, name=f"wm-fo-request-{str(request_id)[:8]}", daemon=True)
+        thread.start()
+        return thread
+
+    def count(self) -> int:
+        with self._lock:
+            return len(self._ids)
+
+
+def _quit_interactive(active: _ActiveRequests) -> None:
+    running = active.count()
+    if running:
+        print(f"{running} irrigation(s) still running at the station(s); "
+              "results will not be shown after exit.", flush=True)
+
+
+def _interactive_mode(operator: FieldOperator, timeout: float, active: _ActiveRequests | None = None) -> None:
     print("Select an available station and enter an irrigation duration in seconds. Type 'q' to quit.")
+    print("You can start irrigations on other stations while earlier ones are running.")
+    active = active or _ActiveRequests()
+    try:
+        _interactive_loop(operator, timeout, active)
+    finally:
+        _quit_interactive(active)
+
+
+def _interactive_loop(operator: FieldOperator, timeout: float, active: _ActiveRequests) -> None:
     while True:
         try:
             stations = operator.request_available_stations(timeout)
@@ -134,12 +210,88 @@ def _interactive_mode(operator: FieldOperator, timeout: float) -> None:
         except ValueError:
             print("Duration must be a positive whole number.")
             continue
-        _submit_and_wait(operator, ws_id, duration, timeout)
+        # Do not wait for the irrigation to finish here: its own thread shows
+        # progress and the final summary while the menu takes the next request.
+        request_id = operator.request_irrigation(ws_id, duration, None)
+        active.watch(operator, request_id, max(timeout, duration + FILE_REQUEST_GRACE_SECONDS))
+        # Wait only for Central's decision, so the next station list no
+        # longer offers a station that has just been authorized.
+        operator.wait_for_decision(request_id, DECISION_WAIT_SECONDS)
+
+
+def console_routes(operator: FieldOperator, active: _ActiveRequests, timeout: float) -> dict:
+    """REST API of the FO web console. Requests are sent without waiting."""
+
+    def status(_request: ApiRequest) -> dict:
+        with operator._lock:
+            link = dict(operator.central_link)
+        return {"operator_id": operator.operator_id, "central": link, "active_requests": active.count()}
+
+    def stations(_request: ApiRequest) -> dict:
+        try:
+            return {"stations": operator.request_available_stations(CONSOLE_DISCOVERY_TIMEOUT_SECONDS)}
+        except TimeoutError as exc:
+            raise ApiError(HTTPStatus.GATEWAY_TIMEOUT, str(exc)) from None
+        except (RuntimeError, OSError) as exc:
+            raise ApiError(HTTPStatus.BAD_GATEWAY, str(exc)) from None
+
+    def irrigations(_request: ApiRequest) -> dict:
+        return {"requests": operator.requests_snapshot()}
+
+    def request_irrigation(request: ApiRequest) -> tuple[int, dict]:
+        body = request.body or {}
+        unknown = set(body) - {"ws_id", "duration_seconds", "target_volume_liters"}
+        if unknown:
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown field(s): {', '.join(sorted(unknown))}")
+        ws_id = require_str(body, "ws_id")
+        duration = optional_positive_int(body, "duration_seconds")
+        target = optional_positive_number(body, "target_volume_liters")
+        if (duration is None) == (target is None):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "choose duration_seconds or target_volume_liters")
+        try:
+            request_id = operator.request_irrigation(ws_id, duration, target)
+        except ValueError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc)) from None
+        except Exception as exc:
+            LOGGER.warning("Could not send irrigation request from the web console: %s", exc)
+            raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "Kafka is unavailable; the request was not sent") from None
+        # Follow the request in the background; the HTTP call returns now.
+        wait = max(timeout, duration + FILE_REQUEST_GRACE_SECONDS) if duration else timeout
+        active.watch(operator, request_id, wait)
+        return HTTPStatus.ACCEPTED, {"request_id": request_id, "status": "SUBMITTED"}
+
+    return {
+        ("GET", "/api/status"): status,
+        ("GET", "/api/stations"): stations,
+        ("GET", "/api/irrigations"): irrigations,
+        ("POST", "/api/irrigations"): request_irrigation,
+    }
+
+
+def console_snapshot(operator: FieldOperator, active: _ActiveRequests):
+    """What the FO page shows, pushed over its live stream."""
+    def snapshot() -> dict:
+        with operator._lock:
+            link = dict(operator.central_link)
+        return {"status": {"operator_id": operator.operator_id, "central": link,
+                           "active_requests": active.count()},
+                "requests": operator.requests_snapshot()}
+    return snapshot
+
+
+def _serve_console_only() -> None:
+    """Keep the FO running for its web console when there is no terminal."""
+    print("No interactive terminal: the Field Operator runs from its web console. Press Ctrl+C to stop.", flush=True)
+    stop = threading.Event()
+    while not stop.wait(3600):
+        pass
 
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = parse_args(argv)
+    panel: ConsoleServer | None = None
+    active = _ActiveRequests()
     bootstrap = f"{config.kafka_host}:{config.kafka_port}"
     worker = None
     publisher = None
@@ -167,15 +319,22 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 1
 
         if exit_code == 0:
+            panel = start_console(config.panel_host, config.panel_port, "fo",
+                                  {"title": f"WM_FO {config.operator_id}", "component": "fo",
+                                   "operatorId": config.operator_id},
+                                  console_routes(operator, active, config.request_timeout),
+                                  console_snapshot(operator, active))
             try:
                 if config.request_file:
                     _file_mode(operator, config.request_file, config.request_timeout)
                 elif config.ws_id:
                     _submit_and_wait(operator, config.ws_id, config.duration_seconds or 0,
                                      config.request_timeout)
-                    _interactive_mode(operator, config.request_timeout)
+                    _interactive_mode(operator, config.request_timeout, active)
+                elif panel is not None and not _stdin_is_interactive():
+                    _serve_console_only()
                 else:
-                    _interactive_mode(operator, config.request_timeout)
+                    _interactive_mode(operator, config.request_timeout, active)
             except (OSError, ValueError, RuntimeError) as exc:
                 LOGGER.error("Field Operator request failed: %s", exc)
                 exit_code = 2
@@ -196,6 +355,8 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             if publisher is not None:
                 publisher.close()
+            if panel is not None:
+                panel.stop()
     return exit_code
 
 

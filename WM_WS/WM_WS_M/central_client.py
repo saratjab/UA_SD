@@ -7,6 +7,7 @@ from types import TracebackType
 from typing import Any
 
 from common import protocol
+from common.event_panel import feed
 
 
 LOGGER = logging.getLogger(__name__)
@@ -46,8 +47,11 @@ class CentralClient:
     def register(self) -> bool:
         sock = self._require_socket()
         protocol.send_message(sock, protocol.register_ws_message(self.ws_id, self.location))
+        feed().record("OUT", "WM_Central", "REGISTER_WS", ws_id=self.ws_id, detail=self.location)
         response = protocol.receive_message(sock)
         response_type = response.get("type")
+        feed().record("IN", "WM_Central", str(response_type), ws_id=self.ws_id,
+                      detail=response.get("reason", ""))
 
         if response_type == "REGISTER_ACK" and response.get("ws_id") == self.ws_id:
             LOGGER.info("WM_WS_M registered with WM_Central as %s", self.ws_id)
@@ -87,6 +91,7 @@ class CentralClient:
         )
         LOGGER.info("Reporting WM_WS_E fault to WM_Central: %s", fault)
         protocol.send_message(sock, message)
+        feed().record("OUT", "WM_Central", "WS_E_FAULT", ws_id=self.ws_id, detail=f"{fault}: {details}")
         response = protocol.receive_message(sock)
         return self._handle_fault_response(response)
 
@@ -94,10 +99,12 @@ class CentralClient:
         sock = self._require_socket()
         LOGGER.info("Reporting WM_WS_E fault resolution to WM_Central")
         protocol.send_message(sock, protocol.fault_resolved_message(self.ws_id, timestamp))
+        feed().record("OUT", "WM_Central", "WS_E_FAULT_RESOLVED", ws_id=self.ws_id)
         return self._handle_fault_response(protocol.receive_message(sock))
 
     def _handle_fault_response(self, response: dict[str, Any]) -> bool:
         response_type = response.get("type")
+        feed().record("IN", "WM_Central", str(response_type), ws_id=self.ws_id, detail=response.get("reason", ""))
         if response_type == "FAULT_ACK":
             LOGGER.info("WM_Central acknowledged fault notification")
             return True

@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import sys
 
+from common.web_console import start_console
+
 from .central_client import CentralClient
 from .config import parse_args
 from .monitor import WateringStationMonitor
@@ -19,7 +21,6 @@ def configure_logging() -> None:
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
     config = parse_args(argv)
-
     central_client = CentralClient(
         host=config.central_host,
         port=config.central_port,
@@ -37,7 +38,15 @@ def main(argv: list[str] | None = None) -> int:
         central_client=central_client,
         engine_server=engine_server,
     )
-    return monitor.run()
+    console = start_console(config.panel_host, config.panel_port, "monitor",
+                            {"title": f"WM_WS_M {config.ws_id}", "component": "monitor", "wsId": config.ws_id},
+                            {("GET", "/api/status"): lambda _request: monitor.status()},
+                            monitor.status)
+    try:
+        return monitor.run()
+    finally:
+        if console is not None:
+            console.stop()
 
 
 if __name__ == "__main__":
