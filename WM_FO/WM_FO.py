@@ -11,20 +11,18 @@ import threading
 import time
 
 from http import HTTPStatus
+from pathlib import Path
 
 from common.kafka_transport import KafkaPublisher, KafkaUnavailable
 from common.web_console import (ApiError, ApiRequest, ConsoleServer, optional_positive_int,
                                 optional_positive_number, require_str, start_console)
 
 from .config import parse_args
+from .file_runner import FILE_REQUEST_DELAY_SECONDS, FILE_REQUEST_GRACE_SECONDS, FileRun
 from .kafka_client import FieldOperator
-from .request_file import load_requests
+from .request_file import parse_request_lines, read_request_file
 
 LOGGER = logging.getLogger("wm_fo")
-FILE_REQUEST_DELAY_SECONDS = 4.0
-# Extra wait beyond a request's own duration: covers authorization, the Engine
-# start and Central's START timeout before a terminal event must have arrived.
-FILE_REQUEST_GRACE_SECONDS = 120.0
 POLL_SHUTDOWN_TIMEOUT_SECONDS = 3.0
 # How long the interactive menu waits for Central to authorize or deny a
 # request before showing the station list again.
@@ -82,23 +80,48 @@ def _submit_and_wait(operator: FieldOperator, ws_id: str, duration: int | None,
     return operator.wait_for_result(request_id, timeout)
 
 
-def _file_mode(operator: FieldOperator, path: str, timeout: float) -> None:
+def _file_mode(operator: FieldOperator, path: str, timeout: float) -> dict:
     """Send each request, wait for its outcome, pause 4 s, then send the next.
 
     The spec moves on once a request concludes "whether successfully or not",
     so one request whose outcome never arrives must not block the whole file.
+    Unusable lines are reported with their line number and skipped.
     """
-    requests = load_requests(path)
-    for index, request in enumerate(requests):
-        LOGGER.info("Processing file request %d of %d", index + 1, len(requests))
-        duration = request.get("duration_seconds")
-        target = request.get("target_volume_liters")
-        wait = max(timeout, duration + FILE_REQUEST_GRACE_SECONDS) if duration else timeout
-        if not _submit_and_wait(operator, request["ws_id"], duration, wait, target):
-            LOGGER.warning("No final result for the request on %s within %.0f s; moving on",
-                           request["ws_id"], wait)
-        if index + 1 < len(requests):
-            time.sleep(FILE_REQUEST_DELAY_SECONDS)
+    requests, skipped = read_request_file(path)
+    if not requests:
+        problems = "; ".join(f"line {s.line}: {s.error}" if s.line else s.error for s in skipped)
+        raise ValueError(f"no usable request in {path}: {problems}")
+    run = FileRun(Path(path).name, requests, skipped, timeout)
+    return run.run(operator, sleep=time.sleep)
+
+
+class _FileRuns:
+    """The web console's current (or last) file run; one runs at a time."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._run: FileRun | None = None
+
+    def start(self, operator: FieldOperator, run: FileRun) -> bool:
+        with self._lock:
+            if self._run is not None and self._run.running:
+                return False
+            self._run = run
+        run.start(operator)
+        return True
+
+    @property
+    def current(self) -> FileRun | None:
+        with self._lock:
+            return self._run
+
+    def in_flight(self) -> int:
+        run = self.current
+        return run.in_flight if run is not None else 0
+
+    def snapshot(self) -> dict | None:
+        run = self.current
+        return run.snapshot() if run is not None else None
 
 
 def _stdin_is_interactive() -> bool:
@@ -219,13 +242,16 @@ def _interactive_loop(operator: FieldOperator, timeout: float, active: _ActiveRe
         operator.wait_for_decision(request_id, DECISION_WAIT_SECONDS)
 
 
-def console_routes(operator: FieldOperator, active: _ActiveRequests, timeout: float) -> dict:
+def console_routes(operator: FieldOperator, active: _ActiveRequests, timeout: float,
+                   file_runs: _FileRuns | None = None) -> dict:
     """REST API of the FO web console. Requests are sent without waiting."""
+    file_runs = file_runs if file_runs is not None else _FileRuns()
 
     def status(_request: ApiRequest) -> dict:
         with operator._lock:
             link = dict(operator.central_link)
-        return {"operator_id": operator.operator_id, "central": link, "active_requests": active.count()}
+        return {"operator_id": operator.operator_id, "central": link,
+                "active_requests": active.count() + file_runs.in_flight()}
 
     def stations(_request: ApiRequest) -> dict:
         try:
@@ -260,22 +286,58 @@ def console_routes(operator: FieldOperator, active: _ActiveRequests, timeout: fl
         active.watch(operator, request_id, wait)
         return HTTPStatus.ACCEPTED, {"request_id": request_id, "status": "SUBMITTED"}
 
+    def run_file(request: ApiRequest) -> tuple[int, dict]:
+        """Start processing an uploaded request file (JSONL), one request at a time."""
+        body = request.body or {}
+        unknown = set(body) - {"filename", "content"}
+        if unknown:
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown field(s): {', '.join(sorted(unknown))}")
+        content = body.get("content")
+        if not isinstance(content, str):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "content must be the text of the request file")
+        filename = body.get("filename") or "requests.jsonl"
+        if not isinstance(filename, str):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "filename must be a string")
+        filename = filename.replace("\\", "/").rsplit("/", 1)[-1][:120] or "requests.jsonl"
+        current = file_runs.current
+        if current is not None and current.running:
+            raise ApiError(HTTPStatus.CONFLICT, f"{current.filename} is still being processed; "
+                                                "wait for it to finish or cancel it")
+        requests, skipped = parse_request_lines(content)
+        if not requests:
+            problems = "; ".join(f"line {s.line}: {s.error}" if s.line else s.error for s in skipped)
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"No usable request in {filename}: {problems}")
+        run = FileRun(filename, requests, skipped, timeout)
+        if not file_runs.start(operator, run):
+            raise ApiError(HTTPStatus.CONFLICT, "another request file is still being processed")
+        return HTTPStatus.ACCEPTED, run.snapshot()
+
+    def cancel_file(_request: ApiRequest) -> dict:
+        current = file_runs.current
+        if current is None or not current.cancel():
+            raise ApiError(HTTPStatus.CONFLICT, "no request file is being processed")
+        return {"message": "No further requests from the file will be sent.", "file_run": current.snapshot()}
+
     return {
         ("GET", "/api/status"): status,
         ("GET", "/api/stations"): stations,
         ("GET", "/api/irrigations"): irrigations,
         ("POST", "/api/irrigations"): request_irrigation,
+        ("POST", "/api/request-file"): run_file,
+        ("POST", "/api/request-file/cancel"): cancel_file,
     }
 
 
-def console_snapshot(operator: FieldOperator, active: _ActiveRequests):
+def console_snapshot(operator: FieldOperator, active: _ActiveRequests, file_runs: _FileRuns | None = None):
     """What the FO page shows, pushed over its live stream."""
     def snapshot() -> dict:
         with operator._lock:
             link = dict(operator.central_link)
+        in_flight = file_runs.in_flight() if file_runs is not None else 0
         return {"status": {"operator_id": operator.operator_id, "central": link,
-                           "active_requests": active.count()},
-                "requests": operator.requests_snapshot()}
+                           "active_requests": active.count() + in_flight},
+                "requests": operator.requests_snapshot(),
+                "file_run": file_runs.snapshot() if file_runs is not None else None}
     return snapshot
 
 
@@ -292,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     config = parse_args(argv)
     panel: ConsoleServer | None = None
     active = _ActiveRequests()
+    file_runs = _FileRuns()
     bootstrap = f"{config.kafka_host}:{config.kafka_port}"
     worker = None
     publisher = None
@@ -322,8 +385,8 @@ def main(argv: list[str] | None = None) -> int:
             panel = start_console(config.panel_host, config.panel_port, "fo",
                                   {"title": f"WM_FO {config.operator_id}", "component": "fo",
                                    "operatorId": config.operator_id},
-                                  console_routes(operator, active, config.request_timeout),
-                                  console_snapshot(operator, active))
+                                  console_routes(operator, active, config.request_timeout, file_runs),
+                                  console_snapshot(operator, active, file_runs))
             try:
                 if config.request_file:
                     _file_mode(operator, config.request_file, config.request_timeout)

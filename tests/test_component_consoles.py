@@ -183,16 +183,18 @@ class EngineControlsTests(unittest.TestCase):
         controls.clear_failure()
         self.assertFalse(controls.status()["failed"])
 
-    def test_central_loss_reported_by_monitor_is_visible_and_halts_watering(self) -> None:
+    def test_central_loss_is_visible_and_watering_continues_until_it_ends(self) -> None:
         engine = self.engine()
         controls = StationControls(engine)
         engine.request_irrigation("OP_001", 30)
         engine._apply_central_link(False)
-        self.assertTrue(engine.irrigation.wait_until_finished(2))
         status = controls.status()
         self.assertFalse(status["central"]["reachable"])
-        self.assertEqual(status["state"], "IDLE")
+        self.assertEqual(status["state"], "WATERING")
         self.assertFalse(engine.request_irrigation("OP_001", 30))
+        engine.stop_irrigation()
+        self.assertTrue(engine.irrigation.wait_until_finished(2))
+        self.assertEqual(controls.status()["state"], "IDLE")
 
     def test_web_routes_refuse_invalid_actions(self) -> None:
         controls = StationControls(self.engine())

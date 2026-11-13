@@ -8,6 +8,7 @@ from contextlib import redirect_stdout
 from unittest import mock
 
 from WM_FO.WM_FO import _file_mode, _interactive_mode, main
+from WM_FO.request_file import FileRequest
 
 REAL_THREAD = threading.Thread
 
@@ -20,7 +21,7 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
             count = 0
             terminal_results = iter(["ACTIVATION_DENIED", "IRRIGATION_COMPLETED", "IRRIGATION_COMPLETED"])
 
-            def request_irrigation(self, ws_id, duration=None, target=None):
+            def request_irrigation(self, ws_id, duration=None, target=None, origin=None):
                 self.count += 1
                 request_id = f"r{self.count}"
                 events.append(("request", ws_id, duration, target, request_id))
@@ -32,11 +33,9 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
                 return True
 
         records = [
-            {"ws_id": "WS_001", "duration_seconds": 5},
-            {"ws_id": "WS_002", "target_volume_liters": 2.0},
-            {"ws_id": "WS_003"},
+            FileRequest(1, "WS_001", 5), FileRequest(2, "WS_002", None, 2.0), FileRequest(3, "WS_003"),
         ]
-        with mock.patch("WM_FO.WM_FO.load_requests", return_value=records), \
+        with mock.patch("WM_FO.WM_FO.read_request_file", return_value=(records, [])), \
                 mock.patch("WM_FO.WM_FO.time.sleep", side_effect=lambda seconds: events.append(("sleep", seconds))):
             _file_mode(Operator(), "unused.jsonl", timeout=1)
 
@@ -50,8 +49,9 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
         operator = mock.Mock()
         operator.request_irrigation.side_effect = ["r1", "r2"]
         operator.wait_for_result.side_effect = [False, True]
-        records = [{"ws_id": "WS_001"}, {"ws_id": "WS_002", "duration_seconds": 2}]
-        with mock.patch("WM_FO.WM_FO.load_requests", return_value=records), \
+        operator.tracked_request.return_value = None
+        records = [FileRequest(1, "WS_001"), FileRequest(2, "WS_002", 2)]
+        with mock.patch("WM_FO.WM_FO.read_request_file", return_value=(records, [])), \
                 mock.patch("WM_FO.WM_FO.time.sleep") as sleep:
             with self.assertLogs("wm_fo", level="WARNING"):
                 _file_mode(operator, "unused.jsonl", timeout=1)

@@ -115,7 +115,8 @@
         el("div", { class: "card-head" },
           el("div", { class: "grow" },
             el("div", { class: "card-title" }, el("span", { class: "mono", text: r.ws_id }), el("span", { class: "muted", text: " · " + WM.mode(r) })),
-            el("div", { class: "card-sub mono", title: r.request_id, text: "req " + WM.shortId(r.request_id) + (r.submitted_at ? " · sent " + WM.time(r.submitted_at) : "") })),
+            el("div", { class: "card-sub mono", title: r.request_id, text: "req " + WM.shortId(r.request_id) + (r.submitted_at ? " · sent " + WM.time(r.submitted_at) : "") }),
+            r.origin && r.origin.file ? el("div", { class: "origin-tag", text: "From " + r.origin.file + " · line " + r.origin.line }) : null),
           WM.chip(r.status)),
         stepState(r),
         showProgress ? WM.progress(r, finished, bad) : null,
@@ -191,6 +192,116 @@
   });
   $("#refresh-stations").addEventListener("click", loadStations);
 
+  /* ---------- request file ---------- */
+  // The file is read in the browser and its text sent to this FO, which sends
+  // the requests one at a time (4 s after each one concludes) and pushes the
+  // run's progress back over the live stream.
+  const FILE_STATE_LABEL = { RUNNING: "Running", WAITING: "Waiting", CANCELLING: "Cancelling", FINISHED: "Finished", CANCELLED: "Cancelled" };
+  const LINE_LABEL = { QUEUED: "Queued", SENT: "In progress", SKIPPED: "Skipped", SEND_FAILED: "Not sent", CANCELLED: "Not sent" };
+  let fileRun = null;
+  let lastFileRun = "";
+  let fileTick = null;
+  const fileInput = $("#file-input");
+
+  function fileRunning() { return !!fileRun && ["RUNNING", "WAITING", "CANCELLING"].includes(fileRun.state); }
+  function syncFileButtons() {
+    $("#file-run").disabled = !fileInput.files.length || fileRunning();
+    $("#file-cancel").hidden = !fileRun || !["RUNNING", "WAITING"].includes(fileRun.state);
+  }
+  fileInput.addEventListener("change", () => { $("#file-error").textContent = ""; syncFileButtons(); });
+
+  $("#file-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const file = fileInput.files[0];
+    if (!file) return;
+    $("#file-error").textContent = "";
+    $("#file-run").disabled = true;
+    try {
+      const content = await file.text();
+      const run = await WM.api("api/request-file", { method: "POST", body: { filename: file.name, content } });
+      applyFileRun(run);
+      WM.toast("Processing " + run.filename, "ok", run.total + " request(s), one at a time" + (run.skipped ? " · " + run.skipped + " line(s) skipped" : ""));
+      fileInput.value = "";
+    } catch (error) {
+      $("#file-error").textContent = error.message;
+    } finally {
+      syncFileButtons();
+    }
+  });
+
+  $("#file-cancel").addEventListener("click", async () => {
+    $("#file-cancel").disabled = true;
+    try {
+      const result = await WM.api("api/request-file/cancel", { method: "POST", body: {} });
+      applyFileRun(result.file_run);
+    } catch (error) {
+      $("#file-error").textContent = error.message;
+    } finally {
+      $("#file-cancel").disabled = false;
+    }
+  });
+
+  function lineOutcome(item) {
+    if (item.state === "SKIPPED") return { chip: WM.chip("SKIPPED", LINE_LABEL.SKIPPED), why: item.error, cls: "skipped" };
+    if (item.state === "SEND_FAILED") return { chip: WM.chip("SEND_FAILED", LINE_LABEL.SEND_FAILED), why: "Could not reach Kafka: " + item.error, cls: "failed" };
+    if (item.state === "CANCELLED") return { chip: WM.chip("CANCELLED", LINE_LABEL.CANCELLED), why: "The run was cancelled before this line.", cls: "" };
+    if (item.state === "QUEUED") return { chip: WM.chip("QUEUED", LINE_LABEL.QUEUED), why: "", cls: "" };
+    // Sent: show the live state of its request, as Central reports it.
+    const live = requests.find((r) => r.request_id === item.request_id);
+    const status = item.state === "DONE" ? (item.outcome || (live && live.status)) : (live ? live.status : "SUBMITTED");
+    const why = live ? summary(live) : item.reason ? WM.reason(item.reason) : "";
+    const bad = ["DENIED", "REJECTED", "INTERRUPTED", "NO_RESULT"].includes(status);
+    return { chip: WM.chip(status), why, cls: bad ? "failed" : item.state === "SENT" ? "current" : "" };
+  }
+
+  function renderFileRun() {
+    const panel = $("#file-run-panel");
+    if (fileTick) { clearTimeout(fileTick); fileTick = null; }
+    syncFileButtons();
+    if (!fileRun) { replace(panel); $("#file-progress").textContent = ""; return; }
+    let stateText = FILE_STATE_LABEL[fileRun.state] || WM.label(fileRun.state);
+    if (fileRun.state === "WAITING" && fileRun.next_at) {
+      const left = Math.max(0, Math.ceil((new Date(fileRun.next_at) - Date.now()) / 1000));
+      stateText = "Next request in " + left + " s";
+      fileTick = setTimeout(renderFileRun, 500);
+    }
+    $("#file-progress").textContent = fileRun.sent + " of " + fileRun.total + " sent" + (fileRun.skipped ? " · " + fileRun.skipped + " skipped" : "");
+    const head = el("div", { class: "row", style: "margin-bottom:8px;flex-wrap:wrap" },
+      el("div", { class: "grow" },
+        el("div", { class: "card-title mono", text: fileRun.filename }),
+        el("div", { class: "card-sub", text: "Started " + WM.time(fileRun.started_at) + (fileRun.finished_at ? " · ended " + WM.time(fileRun.finished_at) : "") })),
+      WM.chip(fileRun.state, stateText));
+    const rows = fileRun.items.map((item) => {
+      const outcome = lineOutcome(item);
+      return el("tr", { class: outcome.cls },
+        el("td", { class: "mono", text: item.line ? String(item.line) : "—" }),
+        el("td", { class: "mono", text: item.ws_id || "—" }),
+        el("td", { text: item.mode || "—" }),
+        el("td", {}, outcome.chip),
+        el("td", { class: "mono", title: item.request_id || "", text: item.request_id ? WM.shortId(item.request_id) : "—" }),
+        el("td", { class: "why", text: outcome.why || "" }));
+    });
+    replace(panel, el("div", { class: "card flat", style: "padding:12px" }, head,
+      el("div", { class: "table-wrap", style: "box-shadow:none" },
+        el("table", { class: "file-lines" },
+          el("thead", {}, el("tr", {}, ["Line", "Station", "Request", "Status", "Request ID", "Details"].map((h) => el("th", { text: h })))),
+          el("tbody", {}, rows))),
+      fileRun.summary ? el("div", { class: "muted", style: "font-size:12.5px;margin-top:8px", text: "Result: " + fileRun.summary + "." }) : null));
+  }
+
+  function applyFileRun(next) {
+    const text = JSON.stringify(next || null);
+    if (text === lastFileRun) return;
+    const wasRunning = fileRunning();
+    lastFileRun = text;
+    fileRun = next || null;
+    renderFileRun();
+    if (wasRunning && fileRun && !fileRunning()) {
+      WM.toast(fileRun.filename + ": " + (FILE_STATE_LABEL[fileRun.state] || fileRun.state).toLowerCase(),
+        fileRun.state === "FINISHED" ? "ok" : "bad", fileRun.summary);
+    }
+  }
+
   /* ---------- live stream ---------- */
   // The FO pushes its requests (with the progress Central relays) and its
   // events the moment they change; nothing here polls.
@@ -202,13 +313,15 @@
     const before = requests.filter((r) => ACTIVE.includes(r.status)).map((r) => r.request_id);
     requests = next;
     renderRequests();
+    if (fileRun) renderFileRun();
     // A request just finished: its station may be available again.
     const after = new Set(requests.filter((r) => ACTIVE.includes(r.status)).map((r) => r.request_id));
-    const done = requests.find((r) => before.includes(r.request_id) && !after.has(r.request_id));
-    if (done) {
-      WM.toast(done.ws_id + ": " + WM.label(done.status), FINISHED_OK.includes(done.status) ? "ok" : "bad", summary(done));
-      setTimeout(loadStations, 500);
-    }
+    const finished = requests.filter((r) => before.includes(r.request_id) && !after.has(r.request_id));
+    finished.forEach((done) => {
+      const where = done.origin && done.origin.line ? " (file line " + done.origin.line + ")" : "";
+      WM.toast(done.ws_id + ": " + WM.label(done.status) + where, FINISHED_OK.includes(done.status) ? "ok" : "bad", summary(done));
+    });
+    if (finished.length) setTimeout(loadStations, 500);
   }
   function applyStatus(data) {
     const chip = $("#central-chip");
@@ -221,7 +334,7 @@
   const addEvents = WM.eventTable({ body: $("#event-rows"), filter: $("#event-filter"), empty: $("#event-empty") });
   WM.stream({
     path: WM.config.streamPath || "stream",
-    onState: (state) => { applyStatus(state.status); applyRequests(state.requests); },
+    onState: (state) => { applyStatus(state.status); applyRequests(state.requests); applyFileRun(state.file_run); },
     onEvents: addEvents,
   });
   // Station availability belongs to Central: ask it on load, after every

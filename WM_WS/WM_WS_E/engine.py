@@ -32,8 +32,8 @@ class WateringStationEngine:
         )
         self.failed = False
         self.blocked = False
-        # False while the Monitor reports it has lost WM_Central: the station
-        # cannot be supervised, so it must not water.
+        # False while the Monitor reports it has lost WM_Central: a running
+        # irrigation finishes, but no new one may start.
         self.central_reachable = True
         self.monitor_socket: socket.socket | None = None
         self._monitor_ready = threading.Event()
@@ -186,13 +186,18 @@ class WateringStationEngine:
                 feed().record("IN", "WM_WS_M", "CENTRAL_REACHABLE", ws_id=self.config.ws_id)
             self.central_reachable = True
             return
+        # Correction guide: if WM_Central goes down, a watering in progress
+        # runs to its end; only new waterings are refused. The final summary
+        # waits in the Kafka outbox until Central is back.
         if self.central_reachable:
-            LOGGER.warning("WM_WS_M lost WM_Central; stopping any irrigation")
+            watering = self.irrigation.state is IrrigationState.WATERING
+            LOGGER.warning("Unable to connect to WM_Central (reported by WM_WS_M); %s",
+                           "current irrigation continues until it ends, new starts refused"
+                           if watering else "new starts refused")
             feed().record("IN", "WM_WS_M", "CENTRAL_UNREACHABLE", ws_id=self.config.ws_id,
-                          detail="irrigation stopped; new starts refused")
+                          detail=("current irrigation continues; " if watering else "")
+                          + "new starts refused")
         self.central_reachable = False
-        if self.irrigation.state is IrrigationState.WATERING:
-            self.irrigation.emergency_stop(reason="monitor_disconnected")
 
     def simulate_failure(self) -> None:
         feed().record("LOCAL", "station menu", "SIMULATED_KO", ws_id=self.config.ws_id)

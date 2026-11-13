@@ -103,17 +103,23 @@ class EngineTests(unittest.TestCase):
         response = engine.handle_monitor_message({"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 99})
         self.assertEqual(response["sequence"], 99)
 
-    def test_lost_central_link_stops_watering_and_blocks_new_starts(self) -> None:
+    def test_lost_central_link_lets_watering_finish_and_blocks_new_starts(self) -> None:
         controller = IrrigationController("WS_001", SolenoidValve(), FlowMeter(60.0), telemetry_interval=0.01)
         engine = WateringStationEngine(engine_config(), controller)
         engine._monitor_ready.set()
-        self.assertTrue(engine.request_irrigation("operator-1", 5.0))
+        self.assertTrue(engine.request_irrigation("operator-1", 0.3))
         response = engine.handle_monitor_message(
             {"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 1, "central_connected": False})
         self.assertEqual(response["type"], "HEALTH_OK")
+        # The irrigation keeps running while Central is unreachable...
+        self.assertIs(controller.state, IrrigationState.WATERING)
+        self.assertTrue(controller.valve.is_open)
+        # ...but no new irrigation may start.
+        self.assertFalse(engine.request_irrigation("operator-1", 1.0))
+        # It ends on its own preset limit, not because Central was lost.
         self.assertTrue(controller.wait_until_finished(timeout=2))
         self.assertFalse(controller.valve.is_open)
-        self.assertEqual(controller.last_result.stopped_by, "monitor_disconnected")
+        self.assertEqual(controller.last_result.stopped_by, "duration")
         self.assertFalse(engine.request_irrigation("operator-1", 1.0))
 
         engine.handle_monitor_message(

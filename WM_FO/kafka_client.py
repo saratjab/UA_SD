@@ -60,7 +60,9 @@ class FieldOperator:
                            auto_offset_reset="latest")
 
     def request_irrigation(self, ws_id: str, duration_seconds: int | None = None,
-                           target_volume_liters: float | None = None) -> str:
+                           target_volume_liters: float | None = None,
+                           origin: dict[str, Any] | None = None) -> str:
+        """Send one activation request. ``origin`` tags requests read from a file."""
         if duration_seconds is not None and target_volume_liters is not None:
             raise ValueError("choose duration_seconds or target_volume_liters, not both")
         if duration_seconds is not None and (isinstance(duration_seconds, bool) or not isinstance(duration_seconds, int) or duration_seconds <= 0):
@@ -82,12 +84,13 @@ class FieldOperator:
                 self._pending.pop(request_id, None)
                 self._decisions.pop(request_id, None)
             raise
+        where = f" (file line {origin['line']})" if origin and origin.get("line") else ""
         feed().record("OUT", "WM_Central", "ACTIVATION_REQUEST", ws_id=ws_id, request_id=request_id,
-                      detail=describe(payload) or "manual mode")
-        self._track_submitted(request_id, ws_id, duration_seconds, target_volume_liters)
+                      detail=(describe(payload) or "manual mode") + where)
+        self._track_submitted(request_id, ws_id, duration_seconds, target_volume_liters, origin)
         mode = (f"{duration_seconds} seconds" if duration_seconds is not None else
                 f"{target_volume_liters:g} litres" if target_volume_liters is not None else "manual mode")
-        print(f"[{ws_id}] Request {request_id} submitted ({mode}).", flush=True)
+        print(f"[{ws_id}] Request {request_id} submitted ({mode}){where}.", flush=True)
         return request_id
 
     def request_available_stations(self, timeout: float = 10.0) -> list[dict[str, str]]:
@@ -212,7 +215,8 @@ class FieldOperator:
             self.central_link = {"ok": ok, "checked_at": _now(), "error": error}
 
     def _track_submitted(self, request_id: str, ws_id: str, duration_seconds: int | None,
-                         target_volume_liters: float | None) -> None:
+                         target_volume_liters: float | None,
+                         origin: dict[str, Any] | None = None) -> None:
         with self._lock:
             now = _now()
             self._tracked[request_id] = {
@@ -223,6 +227,7 @@ class FieldOperator:
                 "updated_at": now, "reason": None, "end_reason": None,
                 "elapsed_seconds": None, "volume_liters": None, "flow_rate_lpm": None,
                 "history": [{"event": "SUBMITTED", "time": now}],
+                "origin": dict(origin) if origin else None,
             }
             while len(self._tracked) > TRACKED_REQUESTS:
                 self._tracked.popitem(last=False)
@@ -282,6 +287,12 @@ class FieldOperator:
             item = self._tracked.get(request_id)
             if item is not None and item["status"] in {"SUBMITTED", "AUTHORIZED", "WATERING"}:
                 item["status"], item["updated_at"] = "NO_RESULT", _now()
+
+    def tracked_request(self, request_id: str) -> dict[str, Any] | None:
+        """One tracked request (a copy), or None once it has been evicted."""
+        with self._lock:
+            item = self._tracked.get(request_id)
+            return {**item, "history": list(item["history"])} if item is not None else None
 
     def requests_snapshot(self) -> list[dict[str, Any]]:
         """Tracked requests, newest first, as plain dicts."""

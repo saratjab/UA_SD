@@ -20,7 +20,7 @@
     /* banners: what the other components told this Engine */
     const banners = [];
     if (!monitorUp) banners.push(banner("bad", "Monitor disconnected", "No health-check session with WM_WS_M. Irrigation is stopped and new starts are refused until the Monitor accepts this Engine again."));
-    else if (!s.central.reachable) banners.push(banner("bad", "Monitor reports Central unreachable", "WM_WS_M lost its connection to WM_Central, so this station cannot be supervised: irrigation was halted and new starts are refused until the Monitor reports Central is back."));
+    else if (!s.central.reachable) banners.push(banner("bad", "Monitor reports Central unreachable", "WM_WS_M lost its connection to WM_Central, Unable to connect to WM_Central: an irrigation in progress runs to its end, and new starts are refused until the Monitor reports Central is back."));
     if (s.failed) banners.push(banner("warn", "Simulated failure active", "The Engine answers KO to health checks. Central shows this station as faulted until you clear the failure."));
     if (s.blocked) banners.push(banner("warn", "Blocked by Central", "Central blocked this station. It will not water until Central activates it."));
     replace($("#banners"), banners);

@@ -23,6 +23,22 @@
 <div class="page">
   <div class="stats" id="stats"></div>
 
+  <section class="section" id="file-section">
+    <div class="section-head">
+      <h2>Run requests from a file</h2>
+      <span class="muted" style="font-size:12px">JSONL files only</span>
+      <div class="grow"></div>
+      <span class="muted" id="file-progress" style="font-size:12px"></span>
+    </div>
+    <form class="file-form" id="file-form">
+      <input type="file" id="file-input" accept=".jsonl" aria-label="Request file">
+      <button class="btn primary" id="file-run" type="submit" disabled>Run file</button>
+      <button class="btn danger" id="file-cancel" type="button" hidden>Cancel</button>
+    </form>
+    <div class="error-text" id="file-error"></div>
+    <div id="file-run-panel"></div>
+  </section>
+
   <div class="grid-2" style="align-items:start;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
     <section class="section" id="stations-section">
       <div class="section-head">
