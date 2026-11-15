@@ -1,4 +1,3 @@
-"""Kafka-facing Central application service; policy stays backed by StateManager/SQLite."""
 from __future__ import annotations
 
 import logging
@@ -37,8 +36,6 @@ class CentralKafkaService:
     Consumers commit only after this service returns successfully.  SQLite's unique
     request id and idempotent transitions make an at-least-once Kafka delivery safe.
     """
-    # Must exceed the Engine's COMMAND_TTL_SECONDS (60 s) plus any clock skew,
-    # so an Engine never starts a request that has already been expired here.
     AUTHORIZATION_TIMEOUT_SECONDS = 90.0
 
     def __init__(self, db: Database, state: StateManager, publisher: KafkaPublisher) -> None:
@@ -48,7 +45,6 @@ class CentralKafkaService:
         state.set_termination_outgoing(self._central_termination_outgoing)
         self.flush_outbox()
 
-    # EndReason recorded by CENTRAL -> end_reason vocabulary the FO already shows.
     _CENTRAL_END_REASONS = {
         EndReason.LEAK: "LEAK_DETECTED",
         EndReason.BLOCKED: "STATION_BLOCKED",
@@ -150,8 +146,6 @@ class CentralKafkaService:
         elif not operator.active:
             error = "OPERATOR_INACTIVE"
         else:
-            # A station with a pending (AUTHORIZED) request still displays as
-            # AVAILABLE, but a new request would be denied as WS_BUSY.
             live = self.db.live_irrigations()
             stations = [
                 {"station_id": view.ws_id, "location": view.location}
@@ -211,9 +205,6 @@ class CentralKafkaService:
                 self.db.add_outgoing(*row)
             self.flush_outbox()
             return
-        # The status check and the insert must be one atomic step: otherwise a
-        # BLOCK/fault/disconnect in between authorizes a station that is no
-        # longer available. StateManager's lock serializes all of those.
         with self.state.exclusive():
             reason = None
             if not operator.active:
@@ -322,9 +313,6 @@ class CentralKafkaService:
             self.latest_telemetry[record.ws_id] = values
             self.state.update_telemetry(record.ws_id, values.flow_rate_lpm, values.accumulated_volume_liters)
             if record.operator_id:
-                # Progress arrives every second and each sample replaces the
-                # previous one, so it skips the durable outbox; the final
-                # summary still goes through it.
                 progress = self._outgoing(OPERATOR_EVENTS, "IRRIGATION_PROGRESS", p,
                                           f"IRRIGATION_PROGRESS:{record.request_id}:{seq}",
                                           operator_id=record.operator_id, ws_id=record.ws_id,

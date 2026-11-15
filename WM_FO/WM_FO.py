@@ -1,8 +1,3 @@
-"""Field Operator entry point.
-
-Run from the repository root with:
-    python -m WM_FO.WM_FO --kafka-host localhost --kafka-port 9092 --operator-id OP_001
-"""
 from __future__ import annotations
 
 import logging
@@ -24,11 +19,7 @@ from .request_file import parse_request_lines, read_request_file
 
 LOGGER = logging.getLogger("wm_fo")
 POLL_SHUTDOWN_TIMEOUT_SECONDS = 3.0
-# How long the interactive menu waits for Central to authorize or deny a
-# request before showing the station list again.
 DECISION_WAIT_SECONDS = 5.0
-# The web console asks Central for the station list with a short timeout so
-# the page stays responsive when Central is slow or down.
 CONSOLE_DISCOVERY_TIMEOUT_SECONDS = 5.0
 
 
@@ -233,12 +224,8 @@ def _interactive_loop(operator: FieldOperator, timeout: float, active: _ActiveRe
         except ValueError:
             print("Duration must be a positive whole number.")
             continue
-        # Do not wait for the irrigation to finish here: its own thread shows
-        # progress and the final summary while the menu takes the next request.
         request_id = operator.request_irrigation(ws_id, duration, None)
         active.watch(operator, request_id, max(timeout, duration + FILE_REQUEST_GRACE_SECONDS))
-        # Wait only for Central's decision, so the next station list no
-        # longer offers a station that has just been authorized.
         operator.wait_for_decision(request_id, DECISION_WAIT_SECONDS)
 
 
@@ -281,7 +268,6 @@ def console_routes(operator: FieldOperator, active: _ActiveRequests, timeout: fl
         except Exception as exc:
             LOGGER.warning("Could not send irrigation request from the web console: %s", exc)
             raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "Kafka is unavailable; the request was not sent") from None
-        # Follow the request in the background; the HTTP call returns now.
         wait = max(timeout, duration + FILE_REQUEST_GRACE_SECONDS) if duration else timeout
         active.watch(operator, request_id, wait)
         return HTTPStatus.ACCEPTED, {"request_id": request_id, "status": "SUBMITTED"}

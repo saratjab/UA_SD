@@ -1,4 +1,3 @@
-"""Opt-in ephemeral SASL_SSL broker verification (requires Docker + openssl)."""
 from __future__ import annotations
 
 import base64
@@ -145,8 +144,6 @@ class SecureKafkaIntegrationTests(unittest.TestCase):
                 with self.assertRaises(Exception):
                     wrong_host_admin.list_topics(timeout=3)
 
-                # Exercise the production entrypoint's startup checks too: it
-                # must reject an unrelated trust anchor and a non-exact SAN.
                 mismatch_ext = root / "mismatch.ext"
                 mismatch_ext.write_text("subjectAltName=DNS:other.example\nextendedKeyUsage=serverAuth\n"
                                         "keyUsage=digitalSignature,keyEncipherment\n")

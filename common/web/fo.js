@@ -1,5 +1,3 @@
-/* WM_FO console: pick an available station, send requests without waiting,
- * and follow each irrigation as Central relays the station's progress. */
 (function () {
   "use strict";
   const { el, $, replace } = WM;
@@ -16,7 +14,6 @@
 
   const filter = WM.segmented($("#request-filter"), () => renderRequests(true));
 
-  /* ---------- stations ---------- */
   async function loadStations() {
     if (stationsLoading) return;
     stationsLoading = true;
@@ -53,7 +50,6 @@
         el("button", { class: "btn primary sm", text: "Request irrigation", onclick: () => openRequest(s) })))));
   }
 
-  /* ---------- requests ---------- */
   function stepState(r) {
     const steps = ["Submitted", "Authorized", "Watering", "Finished"];
     let reached = 0, failedAt = -1, finalLabel = "Finished";
@@ -144,7 +140,6 @@
     }));
   }
 
-  /* ---------- request dialog ---------- */
   const dialog = $("#request-dialog");
   WM.closeOnBackdrop(dialog);
   const PRESETS = { duration: [[30, "30 s"], [60, "1 min"], [300, "5 min"], [900, "15 min"]], volume: [[10, "10 L"], [25, "25 L"], [50, "50 L"], [100, "100 L"]] };
@@ -192,10 +187,6 @@
   });
   $("#refresh-stations").addEventListener("click", loadStations);
 
-  /* ---------- request file ---------- */
-  // The file is read in the browser and its text sent to this FO, which sends
-  // the requests one at a time (4 s after each one concludes) and pushes the
-  // run's progress back over the live stream.
   const FILE_STATE_LABEL = { RUNNING: "Running", WAITING: "Waiting", CANCELLING: "Cancelling", FINISHED: "Finished", CANCELLED: "Cancelled" };
   const LINE_LABEL = { QUEUED: "Queued", SENT: "In progress", SKIPPED: "Skipped", SEND_FAILED: "Not sent", CANCELLED: "Not sent" };
   let fileRun = null;
@@ -246,7 +237,6 @@
     if (item.state === "SEND_FAILED") return { chip: WM.chip("SEND_FAILED", LINE_LABEL.SEND_FAILED), why: "Could not reach Kafka: " + item.error, cls: "failed" };
     if (item.state === "CANCELLED") return { chip: WM.chip("CANCELLED", LINE_LABEL.CANCELLED), why: "The run was cancelled before this line.", cls: "" };
     if (item.state === "QUEUED") return { chip: WM.chip("QUEUED", LINE_LABEL.QUEUED), why: "", cls: "" };
-    // Sent: show the live state of its request, as Central reports it.
     const live = requests.find((r) => r.request_id === item.request_id);
     const status = item.state === "DONE" ? (item.outcome || (live && live.status)) : (live ? live.status : "SUBMITTED");
     const why = live ? summary(live) : item.reason ? WM.reason(item.reason) : "";
@@ -302,9 +292,6 @@
     }
   }
 
-  /* ---------- live stream ---------- */
-  // The FO pushes its requests (with the progress Central relays) and its
-  // events the moment they change; nothing here polls.
   let lastRequests = "";
   function applyRequests(next) {
     const text = JSON.stringify(next);
@@ -314,7 +301,6 @@
     requests = next;
     renderRequests();
     if (fileRun) renderFileRun();
-    // A request just finished: its station may be available again.
     const after = new Set(requests.filter((r) => ACTIVE.includes(r.status)).map((r) => r.request_id));
     const finished = requests.filter((r) => before.includes(r.request_id) && !after.has(r.request_id));
     finished.forEach((done) => {
@@ -337,8 +323,6 @@
     onState: (state) => { applyStatus(state.status); applyRequests(state.requests); applyFileRun(state.file_run); },
     onEvents: addEvents,
   });
-  // Station availability belongs to Central: ask it on load, after every
-  // request, and every few seconds while the page is visible.
   loadStations();
   setInterval(() => { if (!document.hidden && !dialog.open) loadStations(); }, 5000);
 })();

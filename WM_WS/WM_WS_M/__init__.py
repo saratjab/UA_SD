@@ -1,2 +1,1 @@
-"""Watering Station Monitor component."""
 

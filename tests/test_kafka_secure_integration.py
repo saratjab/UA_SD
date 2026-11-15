@@ -1,4 +1,3 @@
-"""Opt-in ephemeral SASL_SSL broker verification (requires Docker + openssl)."""
 from __future__ import annotations
 
 import base64

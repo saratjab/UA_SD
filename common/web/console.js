@@ -1,13 +1,9 @@
-/* Shared helpers for every WaterManagement console page.
- * Data from other components is untrusted: it is only ever inserted with
- * textContent (via WM.el), never as HTML. */
 (function () {
   "use strict";
   const WM = (window.WM = {});
   const configNode = document.getElementById("config");
   WM.config = configNode ? JSON.parse(configNode.textContent) : {};
 
-  /* ---------- DOM ---------- */
   WM.$ = (selector, root) => (root || document).querySelector(selector);
   WM.el = function (tag, attrs, ...children) {
     const node = document.createElement(tag);
@@ -52,7 +48,6 @@
     valve: ["M4 14h16", "M6 14v5h12v-5", "M12 14V6", "M8 6h8"],
   };
 
-  /* ---------- formatting ---------- */
   const STATUS_LABEL = {
     AVAILABLE: "Available", WATERING: "Watering", LEAK: "Leak", OUT_OF_SERVICE: "Out of service",
     DISCONNECTED: "Disconnected", AUTHORIZED: "Authorized", DENIED: "Denied", ENDED: "Ended",
@@ -86,7 +81,6 @@
     return Math.floor(seconds / 3600) + "h ago";
   };
   WM.shortId = (id) => (id ? String(id).slice(0, 8) : "—");
-  // Who started an irrigation: Central, the station's own menu, or a Field Operator.
   WM.startedBy = (id) => (id === "CENTRAL" ? "Started by Central"
     : id === "LOCAL" ? "Started at the station" : "Operator " + (id || "?"));
   WM.mode = function (item) {
@@ -95,7 +89,6 @@
     return "Until stopped";
   };
 
-  /* progress bar for one irrigation: by duration, by volume, or open-ended */
   WM.progress = function (item, finished, failed) {
     let pct = null, left = "", right = "";
     const elapsed = item.elapsed_seconds, volume = item.volume_liters;
@@ -121,7 +114,6 @@
       WM.el("div", { class: "progress-row" }, WM.el("span", { text: left }), WM.el("span", { text: right })));
   };
 
-  /* ---------- API ---------- */
   WM.headers = () => ({});
   WM.api = async function (path, options) {
     const opts = options || {};
@@ -150,14 +142,12 @@
     return data;
   };
 
-  /* ---------- live indicator ---------- */
   WM.setLive = function (ok, message) {
     const node = WM.$("#live");
     if (!node) return;
     node.className = "live " + (ok ? "on" : "down");
     node.textContent = ok ? "Live stream" : message || "Disconnected";
   };
-  /* ---------- toasts ---------- */
   WM.toast = function (message, kind, detail) {
     let stack = WM.$(".toasts");
     if (!stack) { stack = WM.el("div", { class: "toasts", role: "status", "aria-live": "polite" }); document.body.appendChild(stack); }
@@ -167,7 +157,6 @@
     setTimeout(() => node.remove(), kind === "bad" ? 7000 : 4500);
   };
 
-  /* ---------- dialogs ---------- */
   WM.confirm = function ({ title, message, confirmText, danger }) {
     return new Promise((resolve) => {
       const ok = WM.el("button", { class: "btn " + (danger ? "danger solid" : "primary"), value: "ok", text: confirmText || "Confirm" });
@@ -187,7 +176,6 @@
     dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close("cancel"); });
   };
 
-  /* segmented control: returns getter */
   WM.segmented = function (container, onChange) {
     const buttons = Array.from(container.querySelectorAll("button"));
     function select(value) {
@@ -198,7 +186,6 @@
     return { select, value: () => (buttons.find((b) => b.getAttribute("aria-pressed") === "true") || buttons[0]).dataset.value };
   };
 
-  /* ---------- live event table ---------- */
   function category(name) {
     if (/LEAK|FAULT|KO|REJECT|DENIED|TIMEOUT|EXPIRED|ERROR|LOST|UNREACHABLE/.test(name)) return "bad";
     if (/BLOCK/.test(name)) return "warn";
@@ -206,7 +193,6 @@
     if (/START|PROGRESS|TELEMETRY|COMPLETED|AUTHORIZED|ACTIVATE|REGISTER|HEALTHY|RESOLVED|CONNECTED|ACK|REACHABLE/.test(name)) return "ok";
     return "";
   }
-  /* Returns add(events): rows are inserted newest first, only with textContent. */
   WM.eventTable = function ({ body, filter, empty }) {
     const seen = new Set();
     function matches(row) {
@@ -234,11 +220,6 @@
     return (events) => events.forEach(add);
   };
 
-  /* ---------- live stream (Server-Sent Events over fetch) ----------
-   * fetch() is used instead of EventSource so Central's page can send its
-   * Authorization header. The component pushes "events" the moment they
-   * happen and "state" whenever its snapshot changes; the page never polls.
-   * On a dropped connection it reconnects and resumes after the last event. */
   WM.stream = function ({ path, onState, onEvents, onUnauthorized }) {
     let last = 0, stopped = false, controller = null, retry = 1000;
     function dispatch(block) {
@@ -289,7 +270,6 @@
     return { stop() { stopped = true; if (controller) controller.abort(); } };
   };
 
-  /* ---------- chain (component links) ---------- */
   WM.chain = function (container, nodes) {
     const parts = [];
     nodes.forEach((node, index) => {

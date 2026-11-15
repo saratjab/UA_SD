@@ -95,9 +95,6 @@ def main(argv: list[str] | None = None) -> int:
     local_poll_thread = None
     local_operator = None
 
-    # The Monitor session runs from the start so health checks are answered
-    # while Kafka is set up. Without --ws-id (the spec's mode) the WS ID comes
-    # from WM_WS_M's HELLO_ACK, and every Kafka resource is named after it.
     monitor_thread = threading.Thread(target=engine.run, name="wm-ws-e-monitor-session", daemon=True)
     monitor_thread.start()
     try:
@@ -128,9 +125,6 @@ def main(argv: list[str] | None = None) -> int:
         poll_thread.start()
 
         if config.ws_id:
-            # The station's own menu needs no Field Operator: requests go to
-            # Central under the reserved LOCAL identity, and replies are
-            # matched to this station by ws_id.
             local_operator = FieldOperator(
                 LOCAL_OPERATOR_ID,
                 publisher,

@@ -1,4 +1,3 @@
-/* WM_Central console: the whole control menu plus live irrigations. */
 (function () {
   "use strict";
   const { el, $, replace } = WM;
@@ -13,9 +12,8 @@
 
   $("#brand-mark").appendChild(WM.svg(WM.icons.drop));
 
-  /* ---------- token ---------- */
   function token() { try { return sessionStorage.getItem(TOKEN_KEY); } catch (e) { return null; } }
-  function setToken(value) { try { value ? sessionStorage.setItem(TOKEN_KEY, value) : sessionStorage.removeItem(TOKEN_KEY); } catch (e) { /* storage blocked */ } }
+  function setToken(value) { try { value ? sessionStorage.setItem(TOKEN_KEY, value) : sessionStorage.removeItem(TOKEN_KEY); } catch (e) { } }
   let memoryToken = null;
   WM.headers = () => { const t = token() || memoryToken; return t ? { Authorization: "Bearer " + t } : {}; };
 
@@ -48,7 +46,6 @@
   });
   $("#sign-out").addEventListener("click", () => { memoryToken = null; setToken(null); showLogin(); });
 
-  /* ---------- rendering ---------- */
   function renderStats(overview) {
     const items = STATUS_ORDER.map((s) => ({ label: WM.label(s), value: overview.by_status[s] || 0, dot: STATUS_DOT[s] }));
     items.push({ label: "Blocked", value: overview.blocked, dot: "var(--warn)" });
@@ -148,7 +145,6 @@
     }));
   }
 
-  /* ---------- controls ---------- */
   function uuid() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
     const b = crypto.getRandomValues(new Uint8Array(16));
@@ -194,7 +190,6 @@
     $("#result-dialog").showModal();
   }
 
-  /* start dialog (menu 2 and 3, station card "Start") */
   const startDialog = $("#start-dialog");
   WM.closeOnBackdrop(startDialog);
   let startAll = false;
@@ -253,7 +248,6 @@
     if (outcome) startDialog.close("ok");
   });
 
-  /* one-station dialog: block / activate / stop (menu 4, 6, 8) */
   const stationDialog = $("#station-dialog");
   WM.closeOnBackdrop(stationDialog);
   let stationAction = null;
@@ -319,7 +313,6 @@
   });
   $("#station-filter").addEventListener("input", renderStations);
 
-  /* ---------- live stream ---------- */
   const lastSeen = {};
   function changed(key, ...values) {
     const text = JSON.stringify(values);
@@ -328,11 +321,9 @@
     return true;
   }
 
-  // Central pushes its whole picture whenever anything changes.
   function applyState(state) {
     const { overview, irrigations } = state;
     stations = state.stations;
-    // Re-render only what changed, so buttons are not rebuilt under the cursor.
     if (changed("stats", overview.by_status, overview.blocked, overview.live_irrigations)) renderStats(overview);
     if (changed("stations", stations)) renderStations();
     if (changed("live", irrigations.live)) renderLive(irrigations.live);

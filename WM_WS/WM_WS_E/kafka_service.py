@@ -1,4 +1,3 @@
-"""Kafka command adapter for the existing WS Engine and irrigation controller."""
 from __future__ import annotations
 
 import logging
@@ -18,9 +17,6 @@ from .irrigation import IrrigationRequest, IrrigationResult, IrrigationTelemetry
 
 LOGGER = logging.getLogger(__name__)
 
-# A START older than this is never executed. Central expires AUTHORIZED rows
-# after a longer delay (CentralKafkaService.AUTHORIZATION_TIMEOUT_SECONDS), so
-# an Engine can never start a request that Central has already closed.
 COMMAND_TTL_SECONDS = 60.0
 
 
@@ -41,7 +37,6 @@ class EngineKafkaService:
         self._sequence = 0
         self._end_reason = "MANUAL_STOP"
         self._pending_local_stops: set[str] = set()
-        # The last irrigation this Engine finished, for its web console.
         self.last_completed: dict[str, Any] | None = None
         self._lock = threading.RLock()
         self._retry_stop = threading.Event()
@@ -64,8 +59,6 @@ class EngineKafkaService:
         self._retry_thread.start()
 
     def worker(self, bootstrap: str, consumer: Any | None = None) -> KafkaWorker:
-        # The consumer group is per station; a shared "unassigned" group would
-        # split WS_COMMANDS partitions between unrelated Engines.
         ws_id = self.engine.config.ws_id
         if not ws_id:
             raise ValueError("the Engine needs its WS ID (from WM_WS_M) before consuming commands")
@@ -115,8 +108,6 @@ class EngineKafkaService:
             with self._lock:
                 if self._store.execute("SELECT 1 FROM engine_requests WHERE request_id=?", (request_id,)).fetchone():
                     return
-                # Every refusal is reported: Central keeps the request AUTHORIZED
-                # (and the station busy) until it hears back from the Engine.
                 if _command_age_seconds(message) > COMMAND_TTL_SECONDS:
                     LOGGER.warning("Rejecting expired START_IRRIGATION request_id=%s", request_id)
                     self._reject_start(request_id, operator_id, "COMMAND_EXPIRED"); return
@@ -249,8 +240,6 @@ class EngineKafkaService:
     def _publish(self, event_type: str, request_id: str, operator_id: str, payload: dict[str, Any]) -> None:
         message = self._event(event_type, request_id, operator_id, payload)
         if event_type != "IRRIGATION_TELEMETRY":
-            # The SQLite connection is shared by the Kafka, irrigation and retry
-            # threads; an unlocked write could join another thread's transaction.
             with self._lock:
                 self._store.execute("INSERT OR IGNORE INTO engine_outbox VALUES (?, ?)", (message["message_id"], json.dumps(message, separators=(",", ":"), sort_keys=True)))
             self.flush_outbox()

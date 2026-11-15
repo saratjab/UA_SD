@@ -18,7 +18,6 @@ from .display import show_event
 LOGGER = logging.getLogger(__name__)
 TERMINAL_EVENTS = {"ACTIVATION_DENIED", "IRRIGATION_COMPLETED", "COMMAND_REJECTED"}
 TRACKED_REQUESTS = 100
-# End reasons that mean the irrigation did not finish the way it was asked.
 INTERRUPTED_END_REASONS = {"ENGINE_FAULT", "MONITOR_DISCONNECTED", "LEAK_DETECTED", "STATION_BLOCKED",
                            "CENTRAL_RESTART", "LEAK", "DISCONNECTED", "BLOCKED"}
 STOPPED_END_REASONS = {"MANUAL_STOP", "CENTRAL_STOP", "MANUAL"}
@@ -43,14 +42,10 @@ class FieldOperator:
         self.station_id = station_id
         self._lock = threading.RLock()
         self._pending: dict[str, threading.Event] = {}
-        # Set by Central's first answer to a request (authorized, denied, ...),
-        # so a non-blocking menu can wait for the decision but not the outcome.
         self._decisions: dict[str, threading.Event] = {}
         self._results: dict[str, dict[str, Any]] = {}
         self._station_discoveries: dict[str, tuple[threading.Event, dict[str, Any] | None]] = {}
         self._shown_terminal_request_ids: set[str] = set()
-        # What this FO knows about each of its recent requests, for its web
-        # console: Central's decision and the station's progress and summary.
         self._tracked: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.central_link: dict[str, Any] = {"ok": None, "checked_at": None, "error": None}
 
@@ -208,7 +203,6 @@ class FieldOperator:
                     waiter.set()
         return True
 
-    # ----- request tracking for the web console -----
 
     def _central_seen(self, ok: bool, error: str | None = None) -> None:
         with self._lock:
@@ -240,7 +234,7 @@ class FieldOperator:
         with self._lock:
             item = self._tracked.get(request_id)
             if item is None:
-                # A result for a request sent before this FO restarted.
+
                 self._track_submitted(request_id, str(message.get("ws_id") or "?"), None, None)
                 item = self._tracked[request_id]
                 item["submitted_at"] = None

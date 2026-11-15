@@ -1,21 +1,3 @@
-"""SQLite access layer for WM_Central.
-
-Design rules:
-
-* ONE sqlite3 connection shared by all threads, every operation guarded by a
-  re-entrant lock. Central's database traffic is tiny (a few writes per
-  irrigation) and SQLite serializes writers anyway, so the lock costs nothing -
-  while a connection per thread would leak one connection for every Monitor
-  thread that ever existed (Central must run indefinitely).
-* Autocommit mode + explicit ``BEGIN IMMEDIATE`` transactions, so a "check then
-  insert" sequence is atomic.
-* Foreign keys are switched on (SQLite default is OFF).
-* This layer stores facts. It does NOT decide policy (who may irrigate) - that
-  belongs to ``authorization.py`` / ``state_manager.py``.
-* Use a real file path. After close() every call raises RuntimeError, so stop
-  every thread that uses the database BEFORE closing it.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -123,10 +105,6 @@ class Database:
             self._migrate_requested_volume(conn)
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
             self._migrate_outbox_keys(conn)
-            # Irrigations started from CENTRAL's own controls are attributed to
-            # this operator instead of borrowing a real field operator's ID.
-            # Manual starts from a station's own menu use LOCAL; the station
-            # itself is identified by the request's ws_id.
             conn.executemany(
                 "INSERT OR IGNORE INTO operators (operator_id, name, active) VALUES (?, ?, 1)",
                 [(CENTRAL_OPERATOR_ID, "WM_Central"), (LOCAL_OPERATOR_ID, "Watering Station (local menu)")],

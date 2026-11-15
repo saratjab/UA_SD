@@ -139,8 +139,6 @@ class IrrigationController:
         return self._build_telemetry(operator_id, reading, state, final=False)
 
     def _run(self, request: IrrigationRequest) -> None:
-        # The finally guarantees the valve closes and the cycle ends even if an
-        # unexpected error escapes the loop; otherwise the valve would stay open.
         stopped_by = "engine_error"
         try:
             while True:

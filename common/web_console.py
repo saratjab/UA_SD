@@ -1,20 +1,3 @@
-"""Small interactive web console shared by every component.
-
-Each process can serve one page (``common/web/<page>.html``) plus a JSON API.
-Only the standard library is used:
-
-- ``GET /`` serves the page, ``GET /static/<name>`` serves the shared CSS/JS
-  from a fixed whitelist (the files in ``common/web``), ``GET /events`` serves
-  the component's live event feed.
-- Component routes are plain callables registered as ``("GET", "/api/x")``.
-  Each request runs on its own thread, so a slow handler (for example an FO
-  waiting for Central's station list) never blocks the page.
-
-The page has no authentication because it is published on ``127.0.0.1`` only.
-To stop another website open in the same browser from driving it, every POST
-must be ``application/json`` (which a cross-site form cannot send without a
-CORS preflight we never answer) and a supplied ``Origin`` must match ``Host``.
-"""
 from __future__ import annotations
 
 import json
@@ -40,8 +23,7 @@ _CONTENT_TYPES = {
     ".js": "text/javascript; charset=utf-8",
     ".svg": "image/svg+xml",
 }
-# The page keeps its configuration in a non-executable JSON block, so the
-# policy can forbid every inline script.
+
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
     "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
@@ -289,7 +271,7 @@ class ConsoleServer:
 
                     run_stream(write, source or feed(), snapshot, after, stop)
                 except OSError:
-                    pass  # the browser closed the page
+                    pass
                 except Exception:
                     LOGGER.exception("Live stream failed")
                 finally:

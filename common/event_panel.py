@@ -1,14 +1,3 @@
-"""Live event feed and a tiny read-only web panel for every component.
-
-Each process (WM_Central, WM_FO, WM_WS_E, WM_WS_M) records the messages it
-exchanges with other components in one in-memory ``EventFeed``. A small HTTP
-page polls ``events?after=<seq>`` every second and shows them as a live stream,
-so an irrigation can be followed from the FO through Central to the station.
-
-Only the standard library is used. The page never inserts event data as HTML
-(rows are built with ``textContent``), because event fields such as ``ws_id``
-come from other, untrusted components.
-"""
 from __future__ import annotations
 
 import json
@@ -34,7 +23,6 @@ class EventFeed:
         self._events: deque[dict[str, Any]] = deque(maxlen=capacity)
         self._seq = 0
         self._lock = threading.Lock()
-        # Wakes live streams the moment an event is recorded.
         self._changed = threading.Condition(self._lock)
 
     def wait_for_new(self, after: int, timeout: float) -> bool:

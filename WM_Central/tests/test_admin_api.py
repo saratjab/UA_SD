@@ -264,7 +264,6 @@ class CentralAdminApiTests(DatabaseTestCase):
             ({"action": "block", "station_id": "WS_NOPE"}, 404),
             ({"action": "start", "station_id": "WS_001", "duration_seconds": 3, "target_volume_liters": 2}, 400),
             ({"action": "start", "station_id": "WS_001", "duration_seconds": 0}, 400),
-            # Central never starts an irrigation on behalf of a Field Operator.
             ({"action": "start", "station_id": "WS_001", "duration_seconds": 3, "operator_id": "OP_001"}, 400),
             ({"action": "block", "station_id": "WS_001", "duration_seconds": 3}, 400),
         ]

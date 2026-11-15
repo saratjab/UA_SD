@@ -1,19 +1,3 @@
-"""Station state for WM_Central.
-
-The displayed status of a station is DERIVED (ADR-001) from:
-
-    connectivity        -> in memory only (``_connections``)
-    admin_state         -> SQLite (blocked or not)
-    open fault          -> SQLite (``faults`` table)
-    live irrigation     -> SQLite (``irrigations`` table)
-
-``StateManager`` is the SINGLE place that changes that state. Socket threads
-(now) and Kafka threads (later) all go through it, so two channels can never
-update a station in conflicting ways. One re-entrant lock protects the
-memory + DB combination. The lock is only held for short local operations -
-never while doing network I/O (callers close sockets *after* the call returns).
-"""
-
 from __future__ import annotations
 
 import logging
@@ -115,9 +99,6 @@ class StateManager:
         with self._lock:
             previous = self._connections.get(ws_id)
             if previous is not None and previous is not connection:
-                # Without station credentials a newcomer cannot prove it is the
-                # real station, so the live session wins. A dead peer frees the
-                # ID once TCP keepalive closes its socket (about 25 s).
                 LOGGER.warning("WS %s is already connected; rejecting a second registration", ws_id)
                 return RegisterOutcome(False, "already_connected")
             result = self._db.register_station(ws_id, location)

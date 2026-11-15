@@ -1,8 +1,3 @@
-"""Station controls shared by the Engine's terminal menu and its web console.
-
-One code path for manual start/stop and simulated failure, so the terminal
-and the page always behave the same way.
-"""
 from __future__ import annotations
 
 import logging
@@ -88,7 +83,6 @@ class StationControls:
         self.engine.clear_failure()
         return "Simulated failure cleared."
 
-    # ----- web console -----
 
     def status(self) -> dict[str, Any]:
         engine, irrigation = self.engine, self.engine.irrigation

@@ -1,2 +1,0 @@
-"""Watering Station Engine component."""
-

@@ -91,7 +91,6 @@ def _to_request(item: Any, line: int) -> FileRequest:
 
 
 def _strip_request_prefix(error: ValueError, line: int) -> str:
-    # _validate says "request N ..."; report it against the file line instead.
     message = str(error)
     prefix = f"request {line} "
     return message[len(prefix):] if message.startswith(prefix) else message
@@ -115,7 +114,7 @@ def parse_request_lines(content: str) -> tuple[list[FileRequest], list[SkippedLi
         try:
             whole = json.loads(content)
         except json.JSONDecodeError:
-            whole = None  # not a single JSON document: read it as JSONL below
+            whole = None
     if isinstance(whole, list):
         if not whole:
             return requests, [SkippedLine(0, "the file contains no requests")]

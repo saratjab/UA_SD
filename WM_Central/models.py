@@ -1,9 +1,3 @@
-"""Domain vocabulary for WM_Central.
-
-Enum *values* are the exact strings stored in SQLite (see db/schema.sql) and,
-later, sent over Kafka. Never rename them silently.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

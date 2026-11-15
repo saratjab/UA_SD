@@ -71,7 +71,6 @@ class EngineKafkaTests(unittest.TestCase):
         self.assertEqual(from_env.state_path, "/engine-state/from-env.sqlite3")
 
     def test_engine_takes_no_operator_id(self) -> None:
-        # Any Field Operator can use any station: the Engine is never bound to one.
         arguments = ["--ws-id", "WS_001", "--kafka-host", "broker", "--kafka-port", "9092",
                      "--monitor-host", "monitor", "--monitor-port", "6001"]
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit):

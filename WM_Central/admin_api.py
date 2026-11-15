@@ -1,10 +1,3 @@
-"""Authenticated HTTP controls for a headless WM_Central deployment.
-
-The API intentionally delegates writes to CentralKafkaService so validation,
-SQLite state transitions, and outgoing Kafka messages keep using the existing
-transactional path. Public deployments must sit behind an HTTPS terminator.
-"""
-
 from __future__ import annotations
 
 import hmac
@@ -34,7 +27,6 @@ LOGGER = logging.getLogger("wm_central.admin_api")
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_CONCURRENT_ADMIN_REQUESTS = 32
 RECENT_IRRIGATIONS_LIMIT = 50
-# Each open console holds one live stream; keep room for API calls.
 MAX_ADMIN_STREAMS = 8
 _ASSETS = static_assets()
 
@@ -111,7 +103,7 @@ class CentralAdminServer:
         LOGGER.info("Central admin HTTP listening on %s:%s", self.host, self.port)
 
     def stop(self) -> None:
-        self._stopping.set()  # ends open live streams so shutdown can join them
+        self._stopping.set() 
         server, thread = self._server, self._thread
         self._server = None
         self._thread = None
@@ -135,8 +127,6 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             parts = urlsplit(self.path)
             if parts.path == "/panel":
-                # Static page with no data; it asks for the admin token and
-                # sends it as a bearer header to the /v1 endpoints.
                 self._reply_panel()
                 return
             if parts.path.startswith("/static/"):
@@ -266,7 +256,7 @@ def _handler_type(owner: CentralAdminServer) -> type[BaseHTTPRequestHandler]:
 
                 run_stream(write, feed(), lambda: _console_state(owner), after, owner._stopping)
             except OSError:
-                pass  # the browser closed the page
+                pass  
             except Exception:
                 LOGGER.exception("Central live stream failed")
             finally:
@@ -469,8 +459,6 @@ def _execute_command(owner: CentralAdminServer, body: dict[str, Any], idempotenc
         if "target_volume_liters" in body:
             if isinstance(target, bool) or not isinstance(target, (int, float)) or not math.isfinite(target) or target <= 0:
                 raise ValueError("target_volume_liters must be a positive finite number")
-        # Central starts irrigations under its own identity only; it never acts
-        # on behalf of a Field Operator.
         operator_id = CENTRAL_OPERATOR_ID
         if all_stations:
             targets = [ws_id for ws_id in targets if stations[ws_id].status is StationStatus.AVAILABLE]

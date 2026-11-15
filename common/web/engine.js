@@ -1,4 +1,3 @@
-/* WM_WS_E console: valve, current irrigation, links to Monitor and Central. */
 (function () {
   "use strict";
   const { el, $, replace } = WM;
@@ -17,7 +16,6 @@
     const monitorUp = s.monitor.connected;
     const centralUp = monitorUp && s.central.reachable;
 
-    /* banners: what the other components told this Engine */
     const banners = [];
     if (!monitorUp) banners.push(banner("bad", "Monitor disconnected", "No health-check session with WM_WS_M. Irrigation is stopped and new starts are refused until the Monitor accepts this Engine again."));
     else if (!s.central.reachable) banners.push(banner("bad", "Monitor reports Central unreachable", "WM_WS_M lost its connection to WM_Central, Unable to connect to WM_Central: an irrigation in progress runs to its end, and new starts are refused until the Monitor reports Central is back."));
@@ -25,7 +23,6 @@
     if (s.blocked) banners.push(banner("warn", "Blocked by Central", "Central blocked this station. It will not water until Central activates it."));
     replace($("#banners"), banners);
 
-    /* chain */
     WM.chain($("#chain"), [
       { icon: "E", name: "Engine " + (s.ws_id || ""), state: WM.label(s.state), self: true },
       { icon: "M", name: "Monitor (WM_WS_M)", state: monitorUp ? "health checks OK" : "not connected",
@@ -34,7 +31,7 @@
         link: { ok: monitorUp ? s.central.reachable : null, tag: "via Monitor socket" } },
     ]);
 
-    /* hero */
+
     const valve = $("#valve");
     valve.className = "valve" + (watering ? " on" : s.failed ? " fail" : "");
     $("#state-text").textContent = watering ? "Watering" : s.failed ? "Failed" : "Idle";
@@ -61,7 +58,6 @@
         "Starts arrive from Central (authorized FO or Central requests) or from the manual start below."));
     }
 
-    /* controls */
     const local = s.local_menu;
     $("#btn-start").hidden = !local.enabled;
     $("#btn-start").disabled = !local.enabled || !!irr || !!local.pending_request || watering || !centralUp || s.failed || s.blocked;
@@ -105,7 +101,6 @@
   });
   $("#btn-clear").addEventListener("click", (e) => act("api/failure", { active: false }, e.currentTarget));
 
-  // The Engine pushes its status and events the moment they change.
   WM.stream({
     path: WM.config.streamPath || "stream",
     onState: (next) => { status = next; render(status); },

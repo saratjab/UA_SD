@@ -87,13 +87,11 @@ class SocketTests(unittest.TestCase):
             protocol.receive_message(self.right)
 
     def test_oversized_payload_is_refused(self) -> None:
-        # 1 MiB does not fit in the socket buffers, so the sender must run in its
-        # own thread; sendall() would otherwise block forever waiting for us to read.
         def flood() -> None:
             try:
                 self.left.sendall(bytes([protocol.STX]) + b"a" * (protocol.MAX_DATA_SIZE + 1))
             except OSError:
-                pass  # the reader gave up and the socket was closed: expected
+                pass  
 
         sender = threading.Thread(target=flood, daemon=True)
         sender.start()

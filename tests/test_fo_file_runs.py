@@ -1,4 +1,3 @@
-"""Request files: parsing with line numbers, the sequential runner, and the FO web routes."""
 from __future__ import annotations
 
 import io
@@ -99,7 +98,6 @@ class FileRunTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             result = run.run(self.operator, sleep=sleep)
 
-        # Spec: the next request is only sent after the previous one concluded, plus 4 s.
         self.assertEqual(sleeps, [4.0, 4.0])
         self.assertEqual(sent_before_sleep, [1, 2])
         self.assertEqual([m["ws_id"] for _, m in self.publisher.records], ["WS_001", "WS_999", "WS_002"])
@@ -111,7 +109,6 @@ class FileRunTests(unittest.TestCase):
         self.assertEqual((by_line[4]["state"], by_line[4]["request_id"]), ("SKIPPED", None))
         self.assertEqual(result["summary"], "2 completed, 1 denied, 1 skipped")
         self.assertEqual((result["total"], result["sent"], result["skipped"]), (3, 3, 1))
-        # Every request carries the file line it came from.
         tracked = {r["request_id"]: r for r in self.operator.requests_snapshot()}
         self.assertEqual(tracked[by_line[2]["request_id"]]["origin"]["line"], 2)
 
@@ -192,7 +189,6 @@ class FileRunRouteTests(unittest.TestCase):
             code, run = call(self.base, "POST", "/api/request-file", {"filename": "C:\\files\\demo.jsonl", "content": SAMPLE})
             self.assertEqual(code, 202)
             self.assertEqual((run["filename"], run["total"]), ("demo.jsonl", 3))
-            # Only the first request is sent until it concludes.
             self.assertTrue(wait_until(lambda: len(self.publisher.records) == 1))
             time.sleep(0.1)
             self.assertEqual(len(self.publisher.records), 1)

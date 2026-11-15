@@ -1,9 +1,3 @@
-"""Monitoring-panel helpers.
-
-The live status table is built on ``StateManager.snapshot()`` and deliberately
-uses plain text because it is also written to Railway logs.
-"""
-
 from __future__ import annotations
 
 import logging

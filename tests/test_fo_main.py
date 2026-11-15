@@ -114,7 +114,7 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
                 return True
 
             def wait_for_result(self, _request_id, _timeout):
-                release.wait(5.0)  # the irrigation is still running
+                release.wait(5.0)
                 return True
 
         output = io.StringIO()

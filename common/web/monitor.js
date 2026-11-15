@@ -1,4 +1,3 @@
-/* WM_WS_M console (read-only): Engine health checks and Central registration. */
 (function () {
   "use strict";
   const { el, $, replace } = WM;

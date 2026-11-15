@@ -1,6 +1,3 @@
-"""Integration tests: a real TCP server on an ephemeral port, driven by raw
-sockets that speak the shared protocol exactly like the Monitor does."""
-
 from __future__ import annotations
 
 import socket

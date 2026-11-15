@@ -31,7 +31,6 @@ class WateringStationMonitor:
         self._fault_active = False
         self._fault_sync_needed = True
         self._last_health_connection_usable = False
-        # What this Monitor knows about its two peers, for its web console.
         self._status_lock = threading.Lock()
         self._last_fault: tuple[str, str] | None = None
         self._status: dict = {
@@ -46,8 +45,6 @@ class WateringStationMonitor:
             if not self._ensure_central_registration():
                 return 1
 
-            # While no Engine is connected, keep the Central session alive so
-            # Central shows the station's fault instead of DISCONNECTED.
             self.engine_server.on_idle = self._ensure_central_registration
             self.engine_server.start()
             while True:
@@ -105,7 +102,6 @@ class WateringStationMonitor:
         finally:
             self._set_engine_connected(False)
 
-    # ----- status for the web console -----
 
     def _set_engine_connected(self, connected: bool) -> None:
         with self._status_lock:

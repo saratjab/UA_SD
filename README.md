@@ -42,20 +42,31 @@ docker compose --profile operator -f docker-compose.local.yml run --rm -it --ser
 
 The default operator is `OP_001`. To use a different seeded operator, prefix the command with `FO_OPERATOR_ID=OP_002` (or `OP_003`). The FO lists available stations; enter a station ID and a positive duration in seconds. Type `q` to exit.
 
+The menu does not wait for an irrigation to finish: each request is followed by its own thread, so the same FO can start irrigations on other stations while earlier ones are still running. Progress and final summaries of all its requests are printed as they arrive. An FO only shows events for its own operator ID; replies addressed to other FOs or to CENTRAL are consumed from the shared `wm.operator.events` topic and silently dropped. Request files (`--request-file`) remain sequential, as the assignment requires: each request is sent after the previous one concludes plus 4 seconds. The same file can be run from the FO web console ("Run requests from a file"). In both places, lines that cannot be read are skipped and reported with their line number, and the remaining lines are still sent.
+
 Several FOs can run and send requests at the same time, but **each FO must use its own operator ID**. If two operators request the same station at once, Central authorizes exactly one; the other receives `ACTIVATION_DENIED WS_BUSY`. An operator ID belongs to one FO process at a time: the FO's Kafka consumer group is named after the ID so that a restarted FO can still show the results of requests it sent before the restart, and two processes sharing one ID would split that group and one of them would miss its replies.
 
-### Live event panels
+### Web consoles
 
-Every component serves a small read-only web page that shows, live, the messages it exchanges with the other components. You can follow one irrigation from the FO that requested it, through Central, to the station and back. Each panel shows only its own component's traffic. Rows are colour-coded like the station states (green for start/progress/completion, red for leak/fault/rejection, orange for block, gray for disconnection), and you can filter by station, request ID or event.
+Every component serves an interactive web console backed by a small REST API, and every console is a **live stream**: each component pushes its events and state to the browser the moment they change (Server-Sent Events on `GET /stream`, `GET /v1/stream` for Central), so you can follow one irrigation from the FO that requested it, through Central, to the station and back without refreshing. If the connection drops, the page reconnects and resumes after the last event it received.
 
-| Component | URL (local stack) |
-|---|---|
-| WM_Central | http://localhost:8001/panel (asks for the admin token; see below) |
-| WS_001 Monitor / Engine | http://localhost:7101 / http://localhost:7102 |
-| WS_002 Monitor / Engine | http://localhost:7103 / http://localhost:7104 |
-| FO | http://localhost:7201 |
+| Component | URL (local stack) | What you can do |
+|---|---|---|
+| WM_Central | http://localhost:8001/panel | Sign in with the admin token, then run the whole control menu (1 status, 2/3 start one/all eligible, 4/5 block one/all, 6/7 activate one/all, 8/9 stop one/all). Watch every station, the live irrigations with their progress (elapsed, volume, flow) and the recent history. Number keys 1–9 open the matching menu item. |
+| WS_001 Monitor / Engine | http://localhost:7101 / http://localhost:7102 | Monitor (read-only): Engine health-check heartbeat, faults reported to Central, Central registration. Engine: valve state and current irrigation, simulate/clear failure, stop, and manual start from the station (recorded as LOCAL, "Started at the station"). Both show the Engine ⇄ Monitor ⇄ Central chain; when the Monitor loses Central the Engine page shows that irrigation is halted until Central is back. |
+| WS_002 Monitor / Engine | http://localhost:7103 / http://localhost:7104 | Same as WS_001. |
+| FO | http://localhost:7201 | See the available stations and request irrigations by duration or target volume. Requests are sent immediately and never block: start several stations, then follow each one (authorized → watering → finished, or denied/rejected) with live progress relayed by Central. A JSONL request file (`{"ws_id": "WS_001", "duration_seconds": 5}` per line) can also be uploaded: its requests run one at a time with a 4 s pause, and each line's outcome is shown. |
 
-All panels are published on `127.0.0.1` only. Central's panel is part of its admin API, which the local stack leaves off and ships without a default secret. Enable it by choosing your own token when starting the stack:
+REST endpoints (JSON):
+
+- Central (bearer token): `GET /v1/stream` (live stream), `GET /v1/overview`, `GET /v1/stations`, `GET /v1/irrigations?scope=all|live|recent&limit=N`, `GET /v1/events?after=N`, `POST /v1/control` (`action` start/block/activate/stop, `station_id` an ID or `all`, `Idempotency-Key` header; Central starts irrigations as `CENTRAL` only, never on behalf of a Field Operator).
+- FO: `GET /stream`, `GET /api/status`, `GET /api/stations`, `GET /api/irrigations`, `POST /api/irrigations` (`ws_id` plus `duration_seconds` or `target_volume_liters`; answers `202` at once), `GET /events`.
+- Engine: `GET /stream`, `GET /api/status`, `POST /api/irrigation/start`, `POST /api/irrigation/stop`, `POST /api/failure` (`{"active": true|false}`), `GET /events`.
+- Monitor: `GET /stream`, `GET /api/status`, `GET /events`.
+
+No component calls another component's API: everything a page shows about other components reaches its own process over Kafka or the station sockets.
+
+All consoles are published on `127.0.0.1` only. The FO, Engine and Monitor consoles have no login, so their POST endpoints only accept `application/json` from the same origin. Central's console is part of its admin API, which the local stack leaves off and ships without a default secret. Enable it by choosing your own token when starting the stack:
 
 ```bash
 CENTRAL_ADMIN_PORT=8001 CENTRAL_ADMIN_TOKEN=<choose-a-token> docker compose -f docker-compose.local.yml up -d --build
@@ -67,7 +78,7 @@ To run a second FO next to the first, give it its own operator ID and panel port
 FO_OPERATOR_ID=OP_002 FO_PANEL_PORT=7202 docker compose --profile operator -f docker-compose.local.yml run --rm -it --service-ports fo
 ```
 
-Outside Docker, enable a panel with `--panel-port <port>` (and `--panel-host`, default `127.0.0.1`) on `WM_FO`, `WM_WS_E` or `WM_WS_M`. Central's panel is part of its admin API: on Railway, open `https://<CENTRAL_ADMIN_HOST>/panel` and enter `CENTRAL_ADMIN_TOKEN`.
+Outside Docker, enable a console with `--panel-port <port>` (and `--panel-host`, default `127.0.0.1`) on `WM_FO`, `WM_WS_E` or `WM_WS_M`. An FO started with a console and no interactive terminal keeps running for its web console. Central's console is part of its admin API: on Railway, open `https://<CENTRAL_DOMAIN>/panel` and enter `CENTRAL_ADMIN_TOKEN` (see "Open Central's web console" below).
 
 The Engine menu can be opened with:
 
@@ -88,6 +99,17 @@ docker compose -f docker-compose.local.yml down
 ## Run Dockerized FO and WS instances against Railway
 
 This layout keeps WM_Central, its SQLite database, and Kafka in Railway and runs every FO and WS container on local PCs. Do not start a second local Central for this setup. Each FO container and each WS container is created by Docker Compose; the WS consists of separate Monitor and Engine containers.
+
+### Open Central's web console
+
+Central is not started on any PC: it runs on Railway and you use it only from the browser, at `https://<CENTRAL_DOMAIN>/panel`. To get that address once:
+
+1. In Railway, open the project and the **Central** service.
+2. **Variables**: make sure `CENTRAL_ADMIN_TOKEN` is set to a long secret of your choice. That value is the token you type on the sign-in page. Railway sets `PORT` itself; Central serves its console and API on `CENTRAL_ADMIN_PORT` if you set one, otherwise on `PORT`.
+3. **Settings → Networking → Public Networking → Generate Domain**. If Railway asks for a port, give that admin port (`CENTRAL_ADMIN_PORT`, or `PORT` when it is not set), not Central's socket port 5000, which stays on its TCP proxy for the Monitors. Railway shows the generated domain; that is `<CENTRAL_DOMAIN>`.
+4. Deploy the latest code (push the branch Railway deploys from), then open `https://<that-domain>/panel` and sign in with the token.
+
+The page works from any PC with a browser. Railway terminates HTTPS in front of Central, and Central refuses plain HTTP there (`CENTRAL_ADMIN_REQUIRE_HTTPS`, on by default).
 
 ### One-time setup on each PC
 
@@ -127,18 +149,17 @@ docker compose \
   --panel-host 0.0.0.0 --panel-port 7100
 ```
 
-Its live event panel is then at http://localhost:7201 (use another host port for a second FO).
+Its web console is then at http://localhost:7201 (use another host port for a second FO).
 
 Replace the Kafka host and port with the external bootstrap endpoint from the deployment env file. At the prompt, choose an available station and enter an irrigation duration. Type `q` to stop the FO; Compose removes its one-off container.
 
 ### Start a Watering Station
 
-Run each station in its own terminal. Use an authorized, unique station ID and an active Central operator ID for the local Engine menu.
+Run each station in its own terminal. Use an authorized, unique station ID. No operator ID is needed: any Field Operator uses their own WM_FO app, and manual starts from the station menu are recorded as the station itself (LOCAL).
 
 ```bash
 export WS_ID=WS_004
 export WS_LOCATION="West Garden"
-export LOCAL_OPERATOR_ID=OP_003
 
 docker compose \
   --project-name wm-ws-ws-004 \
@@ -147,7 +168,7 @@ docker compose \
   up -d --no-build monitor engine
 ```
 
-The station Compose file starts both the Monitor and Engine. It connects the Monitor to Railway Central over TCP and the Engine to Railway Kafka using SASL_SSL and the mounted CA certificate. The Engine state volume persists across `stop` and `up` operations. Their live event panels are at http://localhost:7101 (Monitor) and http://localhost:7102 (Engine); for a second station on the same PC, export distinct `MONITOR_PANEL_PORT` and `ENGINE_PANEL_PORT` values.
+The station Compose file starts both the Monitor and Engine. It connects the Monitor to Railway Central over TCP and the Engine to Railway Kafka using SASL_SSL and the mounted CA certificate. The Engine state volume persists across `stop` and `up` operations. Their web consoles are at http://localhost:7101 (Monitor) and http://localhost:7102 (Engine); for a second station on the same PC, export distinct `MONITOR_PANEL_PORT` and `ENGINE_PANEL_PORT` values.
 
 Check and follow the instance:
 
@@ -197,7 +218,7 @@ Use a known station and active operator. A unique local ID is not automatically 
 | Central | `WM_Central.WM_Central` | TCP socket, Kafka, SQLite path, optional admin API |
 | Field Operator | `WM_FO.WM_FO` | Kafka endpoint, registered operator ID, optional request file or one-off request |
 | Station Monitor | `WM_WS.WM_WS_M.WM_WS_M` | Station ID/location, Central endpoint, Engine listener and health-check timing |
-| Station Engine | `WM_WS.WM_WS_E.WM_WS_E` | Kafka endpoint, Monitor endpoint, station state path, local operator ID |
+| Station Engine | `WM_WS.WM_WS_E.WM_WS_E` | Kafka endpoint, Monitor endpoint, station state path |
 
 `docker-compose.local.yml` defines the local broker, Central, two local stations, and the FO profile. `docker-compose.station.yml` is the standalone Railway-connected WS deployment. `docker-compose.railway.yml` overlays Railway networking/security settings onto the local services for an FO container. `docker-compose.kafka.yml` provides a standalone local Kafka broker and topic initializer.
 

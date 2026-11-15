@@ -1,17 +1,3 @@
-"""Monitor <-> Central socket server.
-
-Transport only: it parses frames, validates message shape, and delegates every
-decision to ``StateManager``.
-
-One thread per Monitor connection. A connection is a station's ONLY liveness
-signal for CENTRAL: when its socket closes, the station is DISCONNECTED. Because
-the Monitor sends nothing while idle, TCP keepalive is enabled so that a
-silently dead peer (cable pulled, machine off) is eventually noticed too.
-
-The socket is strictly request/response: CENTRAL only answers, it never sends
-unsolicited messages (the Monitor reads this socket only right after sending).
-"""
-
 from __future__ import annotations
 
 import logging

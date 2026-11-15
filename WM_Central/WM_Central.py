@@ -1,13 +1,3 @@
-"""WM_Central entry point.
-
-Run from the repository root (the folder that contains WM_Central/ and common/):
-
-    python -m WM_Central.WM_Central --socket-port 5000 --kafka-host localhost --kafka-port 9092 --seed-dev
-
-Startup order follows the PDF ("Solution mechanics", step 1): open the DB, load
-the registered stations, show them DISCONNECTED until they connect, then listen.
-"""
-
 from __future__ import annotations
 
 import logging

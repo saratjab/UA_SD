@@ -1,4 +1,3 @@
-"""Opt-in real-broker Kafka lifecycle smoke test (never uses a mock broker)."""
 from __future__ import annotations
 
 import os

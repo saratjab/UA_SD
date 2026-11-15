@@ -1,12 +1,3 @@
-"""Run the irrigation requests read from a file, as the spec describes.
-
-Send the first request to Central, wait until it concludes (successfully or
-not), wait 4 seconds, then send the next one. Lines that cannot be used are
-reported with their line number and skipped; the rest are still sent.
-
-One runner serves both the terminal (``--request-file``) and the web console,
-so both behave and log the same way.
-"""
 from __future__ import annotations
 
 import logging
@@ -21,11 +12,8 @@ from .request_file import FileRequest, SkippedLine
 
 LOGGER = logging.getLogger("wm_fo")
 FILE_REQUEST_DELAY_SECONDS = 4.0
-# Extra wait beyond a request's own duration: covers authorization, the Engine
-# start and Central's START timeout before a terminal event must have arrived.
 FILE_REQUEST_GRACE_SECONDS = 120.0
 
-# Final request states, as the FO tracks them, grouped for the run summary.
 _SUMMARY_GROUPS = (
     ("completed", {"COMPLETED"}),
     ("stopped", {"STOPPED"}),
@@ -88,7 +76,6 @@ class FileRun:
         self._items = items
         self._by_line = {item["line"]: item for item in items if item["state"] == "QUEUED"}
 
-    # ----- state for the page -----
 
     @property
     def running(self) -> bool:
@@ -129,7 +116,6 @@ class FileRun:
         LOGGER.info("File %s cancelled; no further requests will be sent", self.filename)
         return True
 
-    # ----- processing -----
 
     def start(self, operator: Any) -> threading.Thread:
         thread = threading.Thread(target=self.run, args=(operator,), name=f"wm-fo-file-{self.run_id[:8]}",

@@ -111,12 +111,9 @@ class EngineTests(unittest.TestCase):
         response = engine.handle_monitor_message(
             {"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 1, "central_connected": False})
         self.assertEqual(response["type"], "HEALTH_OK")
-        # The irrigation keeps running while Central is unreachable...
         self.assertIs(controller.state, IrrigationState.WATERING)
         self.assertTrue(controller.valve.is_open)
-        # ...but no new irrigation may start.
         self.assertFalse(engine.request_irrigation("operator-1", 1.0))
-        # It ends on its own preset limit, not because Central was lost.
         self.assertTrue(controller.wait_until_finished(timeout=2))
         self.assertFalse(controller.valve.is_open)
         self.assertEqual(controller.last_result.stopped_by, "duration")

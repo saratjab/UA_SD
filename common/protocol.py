@@ -1,13 +1,3 @@
-"""Shared socket protocol for WM_Central, WM_WS_M and WM_WS_E.
-
-Frame:  STX (0x02) | JSON payload, UTF-8 | ETX (0x03) | LRC
-LRC  :  XOR of every payload byte (STX/ETX are not included).
-
-The framing functions below are byte-for-byte compatible with the Monitor's
-original ``protocol.py``. Everything under "Message types" and "Message
-builders" is the agreed *contract* between the components.
-"""
-
 from __future__ import annotations
 
 import json

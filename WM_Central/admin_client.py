@@ -1,5 +1,3 @@
-"""Interactive PC-side client for the headless Central admin API."""
-
 from __future__ import annotations
 
 import argparse
