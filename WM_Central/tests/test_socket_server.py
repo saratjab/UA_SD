@@ -89,14 +89,15 @@ class RegistrationTests(SocketServerTestCase):
         self.assertEqual(other, {"type": "REGISTER_NACK", "reason": "already_registered"})
         self.assertEqual(self.status(), A.AVAILABLE)
 
-    def test_second_connection_replaces_the_first(self) -> None:
+    def test_second_connection_cannot_hijack_a_connected_station(self) -> None:
         first = self.registered()
-        second = self.registered()
-        self.assert_closed(first)
-        self.assertFalse(wait_until(lambda: self.status() == A.DISCONNECTED, timeout=0.5))
+        second = self.connect()
+        reply = self.call(second, protocol.register_ws_message("WS_001", "North Garden"))
+        self.assertEqual(reply, {"type": "REGISTER_NACK", "reason": "already_connected"})
+        self.assert_closed(second)
         self.assertEqual(self.status(), A.AVAILABLE)
-        reply = self.call(second, protocol.fault_resolved_message("WS_001", "t"))
-        self.assertEqual(reply["type"], "FAULT_ACK")
+        still_served = self.call(first, protocol.fault_resolved_message("WS_001", "t"))
+        self.assertEqual(still_served["type"], "FAULT_ACK")
 
     def test_silent_connection_is_closed_after_the_register_timeout(self) -> None:
         self.server.stop()

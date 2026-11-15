@@ -126,7 +126,7 @@ class BuilderTests(unittest.TestCase):
         )
         self.assertEqual(
             protocol.health_check_message("WS_001", 3),
-            {"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 3},
+            {"type": "HEALTH_CHECK", "ws_id": "WS_001", "sequence": 3, "central_connected": True},
         )
 
 

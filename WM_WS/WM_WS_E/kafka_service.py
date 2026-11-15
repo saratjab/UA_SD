@@ -6,15 +6,30 @@ import json
 import math
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from common.kafka_contract import WS_COMMANDS, WS_EVENTS, MessageValidationError, decode, envelope
+from common.event_panel import describe, feed
 from common.kafka_transport import KafkaPublisher, KafkaWorker
 from .irrigation import IrrigationRequest, IrrigationResult, IrrigationTelemetry
 
 LOGGER = logging.getLogger(__name__)
+
+# A START older than this is never executed. Central expires AUTHORIZED rows
+# after a longer delay (CentralKafkaService.AUTHORIZATION_TIMEOUT_SECONDS), so
+# an Engine can never start a request that Central has already closed.
+COMMAND_TTL_SECONDS = 60.0
+
+
+def _command_age_seconds(message: dict[str, Any]) -> float:
+    """Age of a command from its envelope timestamp (validated ISO-8601 by decode)."""
+    sent = datetime.fromisoformat(message["timestamp"].replace("Z", "+00:00"))
+    if sent.tzinfo is None:
+        sent = sent.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - sent).total_seconds()
 
 
 class EngineKafkaService:
@@ -26,6 +41,8 @@ class EngineKafkaService:
         self._sequence = 0
         self._end_reason = "MANUAL_STOP"
         self._pending_local_stops: set[str] = set()
+        # The last irrigation this Engine finished, for its web console.
+        self.last_completed: dict[str, Any] | None = None
         self._lock = threading.RLock()
         self._retry_stop = threading.Event()
         if str(state_path) != ":memory:":
@@ -47,7 +64,11 @@ class EngineKafkaService:
         self._retry_thread.start()
 
     def worker(self, bootstrap: str, consumer: Any | None = None) -> KafkaWorker:
-        ws_id = self.engine.config.ws_id or "unassigned"
+        # The consumer group is per station; a shared "unassigned" group would
+        # split WS_COMMANDS partitions between unrelated Engines.
+        ws_id = self.engine.config.ws_id
+        if not ws_id:
+            raise ValueError("the Engine needs its WS ID (from WM_WS_M) before consuming commands")
         return KafkaWorker(
             bootstrap,
             f"wm-ws-engine-{ws_id}-v1",
@@ -68,8 +89,12 @@ class EngineKafkaService:
             "Engine command handler entered event=%s ws_id=%s request_id=%s",
             message.get("event_type"), message.get("ws_id"), message.get("request_id"),
         )
+        if self.engine.config.ws_id is None:
+            raise RuntimeError("Engine has no WS ID yet; command left uncommitted")
         if message.get("ws_id") != self.engine.config.ws_id: return
         event_type = message.get("event_type")
+        feed().record("IN", "WM_Central", str(event_type), ws_id=message.get("ws_id"),
+                      request_id=message.get("request_id"), detail=describe(message.get("payload")))
         if event_type == "START_IRRIGATION":
             request_id, operator_id = message.get("request_id"), message.get("operator_id")
             payload = message["payload"]
@@ -90,8 +115,13 @@ class EngineKafkaService:
             with self._lock:
                 if self._store.execute("SELECT 1 FROM engine_requests WHERE request_id=?", (request_id,)).fetchone():
                     return
+                # Every refusal is reported: Central keeps the request AUTHORIZED
+                # (and the station busy) until it hears back from the Engine.
+                if _command_age_seconds(message) > COMMAND_TTL_SECONDS:
+                    LOGGER.warning("Rejecting expired START_IRRIGATION request_id=%s", request_id)
+                    self._reject_start(request_id, operator_id, "COMMAND_EXPIRED"); return
                 if self._request_id is not None or self.engine.irrigation.state.value != "IDLE":
-                    return
+                    self._reject_start(request_id, operator_id, "ENGINE_BUSY"); return
                 self._request_id, self._operator_id, self._sequence, self._end_reason = request_id, operator_id, 0, "MANUAL_STOP"
                 self._target_volume_liters = float(target_volume) if target_volume is not None else None
                 self._store.execute("INSERT OR REPLACE INTO engine_active (ws_id, request_id, operator_id, duration, target_volume, elapsed, volume, end_reason) VALUES (?, ?, ?, ?, ?, 0, 0, 'MANUAL_STOP')", (self.engine.config.ws_id, request_id, operator_id, float(duration) if duration is not None else None, float(target_volume) if target_volume is not None else None))
@@ -104,7 +134,7 @@ class EngineKafkaService:
                         "ENGINE_BLOCKED" if self.engine.blocked else
                         "MONITOR_UNAVAILABLE"
                     )
-                    self._publish("COMMAND_REJECTED", request_id, operator_id, {"reason": reason}); return
+                    self._reject_start(request_id, operator_id, reason); return
                 self._store.execute("INSERT INTO engine_requests VALUES (?, 'ACTIVE')", (request_id,))
             LOGGER.info("Engine irrigation accepted ws_id=%s request_id=%s", self.engine.config.ws_id, request_id)
             self._publish("IRRIGATION_STARTED", request_id, operator_id, {})
@@ -131,6 +161,13 @@ class EngineKafkaService:
             if not self.engine.failed: self.engine.blocked = False
         else: raise MessageValidationError("unsupported command")
 
+    def _reject_start(self, request_id: str, operator_id: str, reason: str) -> None:
+        """Report a refused START once and remember it, so a redelivered copy
+        can never start an irrigation that Central has already denied."""
+        with self._lock:
+            self._store.execute("INSERT OR IGNORE INTO engine_requests VALUES (?, 'REJECTED')", (request_id,))
+            self._publish("COMMAND_REJECTED", request_id, operator_id, {"reason": reason})
+
     def stop_local_irrigation(self, request_id: str) -> bool:
         """Stop this request, or remember its stop until Central authorizes it."""
         with self._lock:
@@ -147,6 +184,20 @@ class EngineKafkaService:
     def active_request_id(self) -> str | None:
         with self._lock:
             return self._request_id
+
+    def active_request(self) -> dict[str, Any] | None:
+        """The request this Engine is executing, as Central authorized it."""
+        with self._lock:
+            if not self._request_id:
+                return None
+            row = self._store.execute("SELECT operator_id, duration, target_volume FROM engine_active WHERE request_id=?",
+                                      (self._request_id,)).fetchone()
+            return {
+                "request_id": self._request_id,
+                "operator_id": self._operator_id,
+                "duration_seconds": row[1] if row else None,
+                "target_volume_liters": self._target_volume_liters,
+            }
 
     def clear_local_stop(self, request_id: str) -> None:
         with self._lock:
@@ -167,13 +218,15 @@ class EngineKafkaService:
         with self._lock:
             if not self._request_id: return
             request_id, operator_id = self._request_id, self._operator_id
-            reason = ("ENGINE_FAULT" if self.engine.failed else
+            reason = ("ENGINE_FAULT" if self.engine.failed or stopped_by == "engine_error" else
                       "MONITOR_DISCONNECTED" if stopped_by == "monitor_disconnected" else
                       "TIME_LIMIT" if stopped_by == "duration" else
                       "TARGET_VOLUME" if stopped_by == "target_volume" else self._end_reason)
             payload = {"end_reason": reason, "duration_seconds": result.duration_seconds, "accumulated_volume_liters": result.accumulated_volume_liters}
             if self._target_volume_liters is not None:
                 payload["target_volume_liters"] = self._target_volume_liters
+            self.last_completed = {"request_id": request_id, "operator_id": operator_id, **payload,
+                                   "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")}
             message = self._event("IRRIGATION_COMPLETED", request_id, operator_id, payload)
             self._store.execute("BEGIN IMMEDIATE")
             try:
@@ -196,10 +249,13 @@ class EngineKafkaService:
     def _publish(self, event_type: str, request_id: str, operator_id: str, payload: dict[str, Any]) -> None:
         message = self._event(event_type, request_id, operator_id, payload)
         if event_type != "IRRIGATION_TELEMETRY":
-            self._store.execute("INSERT OR IGNORE INTO engine_outbox VALUES (?, ?)", (message["message_id"], json.dumps(message, separators=(",", ":"), sort_keys=True)))
+            # The SQLite connection is shared by the Kafka, irrigation and retry
+            # threads; an unlocked write could join another thread's transaction.
+            with self._lock:
+                self._store.execute("INSERT OR IGNORE INTO engine_outbox VALUES (?, ?)", (message["message_id"], json.dumps(message, separators=(",", ":"), sort_keys=True)))
             self.flush_outbox()
-        else:
-            self.publisher.publish(WS_EVENTS, message)
+        elif self.publisher.publish_nowait(WS_EVENTS, message):
+            self._record_out(message)
         LOGGER.info(
             "Engine event published event=%s ws_id=%s request_id=%s",
             event_type, self.engine.config.ws_id, request_id,
@@ -213,7 +269,7 @@ class EngineKafkaService:
 
     def flush_outbox(self) -> None:
         with self._lock:
-            rows = self._store.execute("SELECT message_id, message_json FROM engine_outbox ORDER BY message_id").fetchall()
+            rows = self._store.execute("SELECT message_id, message_json FROM engine_outbox ORDER BY rowid").fetchall()
             for message_id, raw in rows:
                 try:
                     self.publisher.publish(WS_EVENTS, json.loads(raw))
@@ -221,9 +277,15 @@ class EngineKafkaService:
                     LOGGER.exception("Engine final event remains pending message_id=%s", message_id)
                     break
                 message = json.loads(raw)
+                self._record_out(message)
                 if message.get("event_type") == "IRRIGATION_COMPLETED":
                     self._store.execute("UPDATE engine_requests SET status='COMPLETED' WHERE request_id=?", (message.get("request_id"),))
                 self._store.execute("DELETE FROM engine_outbox WHERE message_id=?", (message_id,))
+
+    @staticmethod
+    def _record_out(message: dict[str, Any]) -> None:
+        feed().record("OUT", "WM_Central", message.get("event_type", "?"), ws_id=message.get("ws_id"),
+                      request_id=message.get("request_id"), detail=describe(message.get("payload")))
 
     def _restore_interrupted_request(self) -> None:
         self.engine.irrigation.valve.close()
@@ -253,4 +315,5 @@ class EngineKafkaService:
     def close(self) -> None:
         self._retry_stop.set()
         self._retry_thread.join(timeout=2.0)
-        self._store.close()
+        with self._lock:
+            self._store.close()

@@ -8,6 +8,7 @@ from contextlib import redirect_stdout
 from unittest import mock
 
 from WM_FO.WM_FO import _file_mode, _interactive_mode, main
+from WM_FO.request_file import FileRequest
 
 REAL_THREAD = threading.Thread
 
@@ -20,7 +21,7 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
             count = 0
             terminal_results = iter(["ACTIVATION_DENIED", "IRRIGATION_COMPLETED", "IRRIGATION_COMPLETED"])
 
-            def request_irrigation(self, ws_id, duration=None, target=None):
+            def request_irrigation(self, ws_id, duration=None, target=None, origin=None):
                 self.count += 1
                 request_id = f"r{self.count}"
                 events.append(("request", ws_id, duration, target, request_id))
@@ -32,31 +33,30 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
                 return True
 
         records = [
-            {"ws_id": "WS_001", "duration_seconds": 5},
-            {"ws_id": "WS_002", "target_volume_liters": 2.0},
-            {"ws_id": "WS_003"},
+            FileRequest(1, "WS_001", 5), FileRequest(2, "WS_002", None, 2.0), FileRequest(3, "WS_003"),
         ]
-        with mock.patch("WM_FO.WM_FO.load_requests", return_value=records), \
+        with mock.patch("WM_FO.WM_FO.read_request_file", return_value=(records, [])), \
                 mock.patch("WM_FO.WM_FO.time.sleep", side_effect=lambda seconds: events.append(("sleep", seconds))):
             _file_mode(Operator(), "unused.jsonl", timeout=1)
 
         self.assertEqual(events, [
-            ("request", "WS_001", 5, None, "r1"), ("terminal", "r1", None, "ACTIVATION_DENIED"), ("sleep", 4.0),
-            ("request", "WS_002", None, 2.0, "r2"), ("terminal", "r2", None, "IRRIGATION_COMPLETED"), ("sleep", 4.0),
-            ("request", "WS_003", None, None, "r3"), ("terminal", "r3", None, "IRRIGATION_COMPLETED"),
+            ("request", "WS_001", 5, None, "r1"), ("terminal", "r1", 125.0, "ACTIVATION_DENIED"), ("sleep", 4.0),
+            ("request", "WS_002", None, 2.0, "r2"), ("terminal", "r2", 1, "IRRIGATION_COMPLETED"), ("sleep", 4.0),
+            ("request", "WS_003", None, None, "r3"), ("terminal", "r3", 1, "IRRIGATION_COMPLETED"),
         ])
 
-    def test_file_mode_does_not_advance_if_terminal_waiter_is_lost(self) -> None:
+    def test_file_mode_moves_on_when_a_request_never_concludes(self) -> None:
         operator = mock.Mock()
-        operator.request_irrigation.return_value = "r1"
-        operator.wait_for_result.return_value = False
-        records = [{"ws_id": "WS_001"}, {"ws_id": "WS_002", "duration_seconds": 2}]
-        with mock.patch("WM_FO.WM_FO.load_requests", return_value=records), \
+        operator.request_irrigation.side_effect = ["r1", "r2"]
+        operator.wait_for_result.side_effect = [False, True]
+        operator.tracked_request.return_value = None
+        records = [FileRequest(1, "WS_001"), FileRequest(2, "WS_002", 2)]
+        with mock.patch("WM_FO.WM_FO.read_request_file", return_value=(records, [])), \
                 mock.patch("WM_FO.WM_FO.time.sleep") as sleep:
-            with self.assertRaisesRegex(RuntimeError, "lost its terminal-result waiter"):
+            with self.assertLogs("wm_fo", level="WARNING"):
                 _file_mode(operator, "unused.jsonl", timeout=1)
-        operator.request_irrigation.assert_called_once_with("WS_001", None, None)
-        sleep.assert_not_called()
+        self.assertEqual(operator.request_irrigation.call_count, 2)
+        sleep.assert_called_once_with(4.0)
 
     def test_q_at_station_prompt_exits_without_submitting(self) -> None:
         operator = mock.Mock()
@@ -95,6 +95,37 @@ class FieldOperatorInteractiveTests(unittest.TestCase):
         self.assertIn("West Orchard", rendered)
         self.assertIn("No Watering Stations are currently available", rendered)
         operator.request_irrigation.assert_called_once_with("WS_004", 12, None)
+
+    def test_menu_starts_a_second_station_while_the_first_irrigation_runs(self) -> None:
+        release = threading.Event()
+        requests: list[tuple[str, int]] = []
+        stations = [{"station_id": "WS_001", "location": "North"},
+                    {"station_id": "WS_002", "location": "South"}]
+
+        class Operator:
+            def request_available_stations(self, _timeout):
+                return stations
+
+            def request_irrigation(self, ws_id, duration, target):
+                requests.append((ws_id, duration))
+                return f"request-{ws_id}"
+
+            def wait_for_decision(self, _request_id, _timeout):
+                return True
+
+            def wait_for_result(self, _request_id, _timeout):
+                release.wait(5.0)  # the irrigation is still running
+                return True
+
+        output = io.StringIO()
+        try:
+            with mock.patch("builtins.input", side_effect=["WS_001", "30", "WS_002", "30", "q"]), \
+                    redirect_stdout(output):
+                _interactive_mode(Operator(), timeout=5)
+        finally:
+            release.set()
+        self.assertEqual(requests, [("WS_001", 30), ("WS_002", 30)])
+        self.assertIn("2 irrigation(s) still running", output.getvalue())
 
     def test_discovery_timeout_has_controlled_retry_prompt(self) -> None:
         operator = mock.Mock()

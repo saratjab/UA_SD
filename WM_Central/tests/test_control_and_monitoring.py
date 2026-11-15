@@ -22,6 +22,10 @@ class Publisher:
     def publish(self, topic: str, message: dict, *, key: str | None = None) -> None:
         self.records.append((topic, message))
 
+    def publish_nowait(self, topic: str, message: dict, *, key: str | None = None) -> bool:
+        self.records.append((topic, message))
+        return True
+
 
 class ControlAndMonitoringTests(DatabaseTestCase):
     def setUp(self) -> None:
@@ -50,18 +54,34 @@ class ControlAndMonitoringTests(DatabaseTestCase):
         self.assertEqual([m["ws_id"] for m in activate_commands], ["WS_001", "WS_002"])
 
     def test_start_uses_activation_validation_and_well_formed_engine_contract(self) -> None:
-        execute_control_line("START WS_001 8 OP_001", self.state, self.service, self.log)
+        execute_control_line("START WS_001 8", self.state, self.service, self.log)
         command = next(m for topic, m in self.publisher.records if topic == WS_COMMANDS)
         record = self.db.get_irrigation(command["request_id"])
         self.assertEqual(record.status, IrrigationStatus.AUTHORIZED)
         self.assertEqual(command["event_type"], "START_IRRIGATION")
         self.assertEqual(command["payload"], {"duration_seconds": 8})
         self.assertTrue(command["request_id"])
-        self.assertEqual(command["operator_id"], "OP_001")
+        self.assertEqual(command["operator_id"], "CENTRAL")
+
+    def test_start_cannot_act_on_behalf_of_a_field_operator(self) -> None:
+        execute_control_line("START WS_001 8 OP_001", self.state, self.service, self.log)
+        self.assertEqual(self.db.list_irrigations(), [])
+        self.assertFalse(any(topic == WS_COMMANDS for topic, _m in self.publisher.records))
+
+    def test_station_local_identity_is_seeded_and_active(self) -> None:
+        self.assertTrue(self.db.get_operator("LOCAL").active)
+
+    def test_central_started_irrigation_is_attributed_to_central_not_a_field_operator(self) -> None:
+        self.assertTrue(self.db.get_operator("CENTRAL").active)
+        execute_control_line("START WS_001 8", self.state, self.service, self.log)
+        execute_menu_choice("2", self.state, self.service, self.log,
+                            input_fn=lambda _prompt, answers=iter(["WS_002", "5"]): next(answers))
+        commands = [m for topic, m in self.publisher.records if topic == WS_COMMANDS]
+        self.assertEqual([m["operator_id"] for m in commands], ["CENTRAL", "CENTRAL"])
 
     def test_start_all_records_normal_denials_for_disconnected_stations(self) -> None:
         self.state.disconnect("WS_002", self.state._connections["WS_002"])
-        execute_control_line("START all 4 OP_001", self.state, self.service, self.log)
+        execute_control_line("START all 4", self.state, self.service, self.log)
         records = self.db.list_irrigations()
         self.assertEqual(len(records), 2)
         self.assertEqual(sum(record.status is IrrigationStatus.AUTHORIZED for record in records), 1)
@@ -110,7 +130,7 @@ class ControlAndMonitoringTests(DatabaseTestCase):
 
     def test_numbered_menu_dispatches_status_and_rejects_invalid_input(self) -> None:
         with self.assertLogs("central-test", level="ERROR") as captured:
-            self.assertTrue(execute_menu_choice("8", self.state, self.service, self.log))
+            self.assertTrue(execute_menu_choice("10", self.state, self.service, self.log))
             self.assertTrue(execute_menu_choice("1", self.state, self.service, self.log))
         self.assertIn("Invalid menu choice", "\n".join(captured.output))
 
@@ -123,6 +143,22 @@ class ControlAndMonitoringTests(DatabaseTestCase):
         execute_menu_choice("7", self.state, self.service, self.log)
         activate_commands = [m for topic, m in self.publisher.records if topic == WS_COMMANDS and m["event_type"] == "ACTIVATE_WS"]
         self.assertEqual([m["ws_id"] for m in activate_commands], ["WS_001", "WS_001", "WS_002"])
+
+    def test_menu_stops_one_and_all_active_irrigations(self) -> None:
+        first = self.service.start_irrigation("WS_001", 60, "CENTRAL")
+        second = self.service.start_irrigation("WS_002", 60, "CENTRAL")
+        execute_menu_choice("8", self.state, self.service, self.log, input_fn=lambda _: "WS_001")
+        execute_menu_choice("9", self.state, self.service, self.log)
+        stops = [(m["ws_id"], m["request_id"]) for topic, m in self.publisher.records
+                 if topic == WS_COMMANDS and m["event_type"] == "STOP_IRRIGATION"]
+        self.assertEqual(stops, [("WS_001", first), ("WS_001", first), ("WS_002", second)])
+
+    def test_menu_stop_without_active_irrigation_sends_nothing(self) -> None:
+        with self.assertLogs("central-test", level="WARNING") as captured:
+            execute_menu_choice("8", self.state, self.service, self.log, input_fn=lambda _: "WS_001")
+            execute_menu_choice("9", self.state, self.service, self.log)
+        self.assertIn("no active irrigation", "\n".join(captured.output))
+        self.assertFalse([m for topic, m in self.publisher.records if m["event_type"] == "STOP_IRRIGATION"])
 
     def test_menu_invalid_station_and_start_duration_are_visible(self) -> None:
         with self.assertLogs("central-test", level="ERROR") as captured:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass
 
 
@@ -15,6 +16,8 @@ class MonitorConfig:
     health_interval: float
     health_timeout: float
     location: str = ""
+    panel_host: str = "127.0.0.1"
+    panel_port: int = 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,6 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=2.0,
         help="Seconds to wait for a health response",
     )
+    parser.add_argument("--panel-host", default=os.environ.get("PANEL_HOST", "127.0.0.1"),
+                        help="Interface for the live event panel (default: $PANEL_HOST or 127.0.0.1)")
+    parser.add_argument("--panel-port", type=int, default=int(os.environ.get("PANEL_PORT", "0")),
+                        help="Port for the live event panel web page; 0 disables it (default: $PANEL_PORT or 0)")
     return parser
 
 
@@ -67,4 +74,6 @@ def parse_args(argv: list[str] | None = None) -> MonitorConfig:
         health_interval=args.health_interval,
         health_timeout=args.health_timeout,
         location=args.location,
+        panel_host=args.panel_host,
+        panel_port=args.panel_port,
     )

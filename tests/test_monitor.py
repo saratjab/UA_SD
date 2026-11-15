@@ -15,12 +15,15 @@ class FakeCentralClient:
         self.faults: list[tuple[str, str, str]] = []
         self.resolutions: list[str] = []
         self.connected = False
+        self.unreachable = False
         self.connect_calls = 0
         self.register_calls = 0
 
     def connect(self) -> None:
-        self.connected = True
         self.connect_calls += 1
+        if self.unreachable:
+            raise OSError("Central unreachable")
+        self.connected = True
 
     def close(self) -> None:
         self.connected = False
@@ -198,6 +201,21 @@ class MonitorTests(unittest.TestCase):
 
         self.assertEqual(self.central.connect_calls, 2)
         self.assertEqual(self.central.register_calls, 2)
+
+    def test_health_check_tells_engine_whether_central_is_reachable(self) -> None:
+        for unreachable, expected in ((False, True), (True, False)):
+            with self.subTest(central_unreachable=unreachable):
+                self.central.connected = False
+                self.central.unreachable = unreachable
+                monitor_sock, engine_sock = socket.socketpair()
+                try:
+                    request = self._answer_one_health_check_in_thread(engine_sock, "HEALTH_OK")
+                    self.monitor.perform_health_check(monitor_sock, 1)
+                    request["thread"].join(timeout=2)
+                    self.assertIs(request["central_connected"], expected)
+                finally:
+                    monitor_sock.close()
+                    engine_sock.close()
 
     def _answer_one_health_check_in_thread(
         self,

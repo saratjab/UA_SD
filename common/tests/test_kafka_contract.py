@@ -10,6 +10,11 @@ class KafkaContractTests(unittest.TestCase):
         with self.assertRaises(MessageValidationError): decode(b"[]")
         with self.assertRaises(MessageValidationError): decode(b'{"event_type":"x"}')
 
+    def test_missing_payload_is_a_validation_error_not_key_error(self) -> None:
+        msg = envelope("X", {}, ws_id="WS_1")
+        del msg["payload"]
+        with self.assertRaises(MessageValidationError): decode(msg)
+
     def test_discovery_requests_use_operator_key_but_irrigation_uses_station_key(self) -> None:
         discovery = envelope("AVAILABLE_STATIONS_REQUEST", {},
                              operator_id="OP_002", request_id="list-1")

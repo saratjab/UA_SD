@@ -20,6 +20,7 @@ import threading
 from typing import Any
 
 from common import protocol
+from common.event_panel import feed
 
 from .state_manager import StateManager
 
@@ -190,7 +191,9 @@ class CentralSocketServer:
 
     def _cleanup(self, connection: MonitorConnection) -> None:
         if connection.ws_id is not None:
-            self._state.disconnect(connection.ws_id, connection)
+            if self._state.disconnect(connection.ws_id, connection).was_current:
+                feed().record("LOCAL", f"WM_WS_M {connection.ws_id}", "MONITOR_DISCONNECTED",
+                              ws_id=connection.ws_id, detail="socket closed")
         connection.close()
         with self._connections_lock:
             self._connections.discard(connection)
@@ -227,12 +230,16 @@ class CentralSocketServer:
             return True
 
         outcome = self._state.register(ws_id, location, connection)
+        peer = f"WM_WS_M {ws_id.strip()}"
         if not outcome.ok:
+            feed().record("IN", peer, "REGISTER_REJECTED", ws_id=ws_id.strip(), detail=outcome.reason or "rejected")
             LOGGER.warning("Registration rejected for %r: %s", ws_id, outcome.reason)
             self._send(connection, protocol.register_nack_message(outcome.reason or "rejected"))
             return False
 
         assert outcome.ws_id is not None
+        feed().record("IN", peer, "REGISTER_WS", ws_id=outcome.ws_id,
+                      detail=("enrolled" if outcome.enrolled else "authenticated") + (f" at {location}" if location else ""))
         connection.ws_id = outcome.ws_id
         connection.sock.settimeout(None)
         sent = self._send(connection, protocol.register_ack_message(outcome.ws_id))
@@ -262,6 +269,9 @@ class CentralSocketServer:
         )
         if not outcome.ok:
             return self._send(connection, protocol.fault_nack_message(outcome.reason or "rejected"))
+        feed().record("IN", f"WM_WS_M {connection.ws_id}", "WS_E_FAULT", ws_id=connection.ws_id,
+                      request_id=outcome.ended_request_id,
+                      detail=f"{fault.strip()}: {details}" if isinstance(details, str) and details else fault.strip())
         return self._send(connection, protocol.fault_ack_message(connection.ws_id))
 
     def _handle_fault_resolved(self, connection: MonitorConnection, message: dict[str, Any]) -> bool:
@@ -270,7 +280,8 @@ class CentralSocketServer:
             return False
         if message.get("ws_id") != connection.ws_id:
             return self._send(connection, protocol.fault_nack_message("ws_id_mismatch"))
-        self._state.resolve_fault(connection.ws_id, connection)
+        if self._state.resolve_fault(connection.ws_id, connection):
+            feed().record("IN", f"WM_WS_M {connection.ws_id}", "WS_E_FAULT_RESOLVED", ws_id=connection.ws_id)
         return self._send(connection, protocol.fault_ack_message(connection.ws_id))
 
     @staticmethod

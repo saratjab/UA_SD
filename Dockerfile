@@ -1,7 +1,10 @@
 FROM python:3.12-slim
 
+# DB_PATH points into /data so Central's SQLite file survives redeploys when
+# a volume is mounted there (Railway: attach a volume at /data).
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DB_PATH=/data/wm_central.db
 
 WORKDIR /app
 

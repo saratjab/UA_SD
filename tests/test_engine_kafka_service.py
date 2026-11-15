@@ -23,6 +23,12 @@ class FakePublisher:
     def publish(self, topic, message) -> None:
         if self.fail or message.get("event_type") == self.fail_event: raise RuntimeError("simulated broker outage")
         self.records.append((topic, message))
+    def publish_nowait(self, topic, message) -> bool:
+        try:
+            self.publish(topic, message)
+            return True
+        except RuntimeError:
+            return False
 
 
 class OneMessage:
@@ -63,11 +69,14 @@ class EngineKafkaTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"ENGINE_STATE_PATH": "/engine-state/from-env.sqlite3"}, clear=True):
             from_env = parse_args(arguments)
         self.assertEqual(from_env.state_path, "/engine-state/from-env.sqlite3")
-        local = parse_args(arguments + ["--local-operator-id", "OP_002"])
-        self.assertEqual(local.local_operator_id, "OP_002")
-        with mock.patch.dict("os.environ", {"LOCAL_OPERATOR_ID": "OP_003"}, clear=True):
-            from_env_operator = parse_args(arguments)
-        self.assertEqual(from_env_operator.local_operator_id, "OP_003")
+
+    def test_engine_takes_no_operator_id(self) -> None:
+        # Any Field Operator can use any station: the Engine is never bound to one.
+        arguments = ["--ws-id", "WS_001", "--kafka-host", "broker", "--kafka-port", "9092",
+                     "--monitor-host", "monitor", "--monitor-port", "6001"]
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            parse_args(arguments + ["--local-operator-id", "OP_002"])
+        self.assertFalse(hasattr(parse_args(arguments), "local_operator_id"))
 
     def test_engine_service_creates_parent_for_persistent_state_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -318,6 +327,106 @@ class EngineKafkaTests(unittest.TestCase):
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0]["message_id"], message_id)
             self.assertEqual(restarted._store.execute("SELECT COUNT(*) FROM engine_outbox").fetchone()[0], 0)
+
+    def rejected_reasons(self, publisher) -> list[str]:
+        return [m["payload"]["reason"] for _, m in publisher.records if m["event_type"] == "COMMAND_REJECTED"]
+
+    def test_start_while_busy_is_rejected_instead_of_silently_ignored(self) -> None:
+        publisher = FakePublisher()
+        engine = self.engine(IrrigationController("WS_001", SolenoidValve(), FlowMeter(6), .01))
+        service = EngineKafkaService(engine, publisher)
+        service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 5}, ws_id="WS_001", operator_id="OP", request_id="first"))
+        service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 5}, ws_id="WS_001", operator_id="OP", request_id="second"))
+        self.assertEqual(self.rejected_reasons(publisher), ["ENGINE_BUSY"])
+        self.assertIn("ENGINE_BUSY", COMMAND_REJECTION_REASONS)
+        service.handle_command(envelope("START_IRRIGATION", {"duration_seconds": 5}, ws_id="WS_001", operator_id="OP", request_id="first"))
+        self.assertEqual(self.rejected_reasons(publisher), ["ENGINE_BUSY"])
+        engine.stop_irrigation(); engine.irrigation.wait_until_finished(1)
+        service.close()
+
+    def test_expired_start_command_is_rejected_and_never_opens_the_valve(self) -> None:
+        publisher = FakePublisher()
+        engine = self.engine()
+        service = EngineKafkaService(engine, publisher)
+        command = envelope("START_IRRIGATION", {"duration_seconds": 5}, ws_id="WS_001", operator_id="OP", request_id="stale")
+        command["timestamp"] = "2020-01-01T00:00:00Z"
+        service.handle_command(command)
+        self.assertEqual(self.rejected_reasons(publisher), ["COMMAND_EXPIRED"])
+        self.assertFalse(engine.irrigation.valve.is_open)
+        self.assertEqual(engine.irrigation.state.value, "IDLE")
+        service.close()
+
+    def test_engine_without_cli_ws_id_uses_id_assigned_by_monitor_for_kafka(self) -> None:
+        import socket
+        from common import protocol
+        listener = socket.create_server(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+
+        def monitor() -> None:
+            conn, _ = listener.accept()
+            with conn:
+                protocol.receive_message(conn)
+                protocol.send_message(conn, protocol.hello_ack_message("WS_007"))
+                try:
+                    protocol.receive_message(conn)
+                except (OSError, protocol.ProtocolError):
+                    pass
+
+        thread = threading.Thread(target=monitor, daemon=True)
+        thread.start()
+        config = EngineConfig(None, "localhost", 9092, "127.0.0.1", port, 6, 1, .1, .01)
+        engine = WateringStationEngine(config)
+        runner = threading.Thread(target=engine.run, daemon=True)
+        runner.start()
+        try:
+            self.assertTrue(engine.wait_until_monitor_ready(timeout=2))
+            self.assertEqual(engine.config.ws_id, "WS_007")
+            service = EngineKafkaService(engine, FakePublisher())
+            worker = service.worker("unused", consumer=OneMessageConsumer(b"{}"))
+            self.assertEqual(worker._group_id, "wm-ws-engine-WS_007-v1")
+            service.close()
+        finally:
+            engine.close()
+            listener.close()
+            runner.join(timeout=2)
+
+    def test_kafka_worker_requires_an_assigned_ws_id(self) -> None:
+        config = EngineConfig(None, "localhost", 9092, "localhost", 1, 6, 1, .1, .01)
+        service = EngineKafkaService(WateringStationEngine(config), FakePublisher())
+        with self.assertRaises(ValueError):
+            service.worker("unused", consumer=OneMessageConsumer(b"{}"))
+        service.close()
+
+    def test_outbox_insert_waits_for_the_store_lock(self) -> None:
+        service = EngineKafkaService(self.engine(), FakePublisher())
+        count = lambda: service._store.execute("SELECT COUNT(*) FROM engine_outbox").fetchone()[0]
+        service._retry_stop.set(); service._retry_thread.join(2)
+        publisher_thread = threading.Thread(
+            target=service._publish, args=("IRRIGATION_STARTED", "r1", "OP", {}), daemon=True)
+        with service._lock:
+            publisher_thread.start()
+            publisher_thread.join(0.2)
+            self.assertTrue(publisher_thread.is_alive(), "outbox write must not bypass the store lock")
+            self.assertEqual(count(), 0)
+        publisher_thread.join(2)
+        self.assertFalse(publisher_thread.is_alive())
+        service.close()
+
+    def test_outbox_flushes_in_insertion_order_not_message_id_order(self) -> None:
+        import json
+        import uuid
+        publisher = FakePublisher()
+        service = EngineKafkaService(self.engine(), publisher)
+        expected = []
+        for index in range(20):
+            message = envelope("IRRIGATION_STARTED" if index % 2 == 0 else "IRRIGATION_COMPLETED", {},
+                               ws_id="WS_001", request_id=f"r{index}")
+            message["message_id"] = str(uuid.uuid4())
+            service._store.execute("INSERT INTO engine_outbox VALUES (?, ?)", (message["message_id"], json.dumps(message)))
+            expected.append(message["message_id"])
+        service.flush_outbox()
+        self.assertEqual([message["message_id"] for _, message in publisher.records], expected)
+        service.close()
 
     def test_restart_closes_valve_and_reports_interrupted_result(self) -> None:
         import sqlite3

@@ -72,20 +72,27 @@ class StateManagerTests(DatabaseTestCase):
     def test_unknown_station_has_no_status(self) -> None:
         self.assertIsNone(self.state.status_of("NOPE"))
 
-    def test_second_registration_replaces_the_first_connection(self) -> None:
+    def test_second_registration_cannot_take_over_a_connected_station(self) -> None:
         self.register()
-        newer = object()
-        outcome = self.register(conn=newer)
-        self.assertIs(outcome.replaced, self.conn)
-        self.assertTrue(self.state.is_current("WS_001", newer))
-        self.assertFalse(self.state.is_current("WS_001", self.conn))
+        intruder = object()
+        outcome = self.register(conn=intruder)
+        self.assertEqual((outcome.ok, outcome.reason), (False, "already_connected"))
+        self.assertTrue(self.state.is_current("WS_001", self.conn))
+        self.assertFalse(self.state.is_current("WS_001", intruder))
 
-    def test_stale_connection_cannot_disconnect_the_station(self) -> None:
+    def test_rejected_connection_cannot_disconnect_the_station(self) -> None:
         self.register()
-        newer = object()
-        self.register(conn=newer)
-        self.assertFalse(self.state.disconnect("WS_001", self.conn).was_current)
+        intruder = object()
+        self.register(conn=intruder)
+        self.assertFalse(self.state.disconnect("WS_001", intruder).was_current)
         self.assertEqual(self.state.status_of("WS_001"), A.AVAILABLE)
+
+    def test_station_may_register_again_after_its_connection_closed(self) -> None:
+        self.register()
+        self.state.disconnect("WS_001", self.conn)
+        newer = object()
+        self.assertTrue(self.register(conn=newer).ok)
+        self.assertTrue(self.state.is_current("WS_001", newer))
 
     def test_disconnect_marks_disconnected(self) -> None:
         self.register()
@@ -130,6 +137,7 @@ class StateManagerTests(DatabaseTestCase):
 
     def test_fault_from_a_stale_connection_is_refused(self) -> None:
         self.register()
+        self.state.disconnect("WS_001", self.conn)
         self.register(conn=object())
         outcome = self.state.report_fault("WS_001", self.conn, "health_ko")
         self.assertEqual((outcome.ok, outcome.reason), (False, "not_registered"))

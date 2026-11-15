@@ -246,6 +246,32 @@ class FieldOperatorKafkaTests(unittest.TestCase):
             self.assertTrue(operator.wait_for_result(request_id, timeout=0.01))
         self.assertIn("[WS_001] Irrigation denied: WS_OUT_OF_SERVICE.", output.getvalue())
 
+    def test_authorization_marks_request_decided_without_finishing_it(self) -> None:
+        operator = FieldOperator("OP_001", self.Publisher())
+        request_id = operator.request_irrigation("WS_001", 10)
+        self.assertFalse(operator.wait_for_decision(request_id, timeout=0.01))
+        authorized = envelope("ACTIVATION_AUTHORIZED", {"duration_seconds": 10},
+                              ws_id="WS_001", operator_id="OP_001", request_id=request_id)
+        with redirect_stdout(io.StringIO()):
+            self.assertTrue(operator.handle_bytes(encode(authorized)))
+        self.assertTrue(operator.wait_for_decision(request_id, timeout=0.01))
+        self.assertFalse(operator._pending[request_id].is_set())
+
+    def test_other_operator_events_neither_display_nor_decide(self) -> None:
+        operator = FieldOperator("OP_002", self.Publisher())
+        own_request = operator.request_irrigation("WS_002", 10)
+        foreign = envelope("ACTIVATION_AUTHORIZED", {"duration_seconds": 10},
+                           ws_id="WS_001", operator_id="OP_001", request_id=own_request)
+        central = envelope("IRRIGATION_PROGRESS",
+                           {"duration_seconds": 1.0, "accumulated_volume_liters": 0.1, "flow_rate_lpm": 6.0},
+                           ws_id="WS_001", operator_id="CENTRAL", request_id="central-request")
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertTrue(operator.handle_bytes(encode(foreign)))
+            self.assertTrue(operator.handle_bytes(encode(central)))
+        self.assertEqual(output.getvalue(), "")
+        self.assertFalse(operator.wait_for_decision(own_request, timeout=0.01))
+
     def test_irrigation_completed_remains_a_terminal_result(self) -> None:
         operator = FieldOperator("OP_001", self.Publisher())  
         request_id = operator.request_irrigation("WS_001", 10)
